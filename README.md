@@ -40,3 +40,21 @@ Steps to get a local dev setup up and running:
 3. Update the missing environment variables in the newly created `.env.local` file.
 4. Run `pnpm dev` to start the development server and visit [http://localhost:3000](http://localhost:3000) to see the result.
 5. Start development 🎉
+
+## GitHub Auto Deploy (EC2)
+
+This repo includes `.github/workflows/deploy-ec2.yml` to auto-deploy on pushes to `main`.
+
+Set these repository secrets in GitHub:
+
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `AWS_REGION`
+- `DEPLOY_BUCKET`
+- `EC2_INSTANCE_ID`
+
+Deploy flow:
+
+1. GitHub Actions builds the app.
+2. Uploads `.next` and selected app files to `s3://$DEPLOY_BUCKET/ui-update/`.
+3. Triggers AWS SSM on the EC2 instance to sync artifacts and restart `bristlecone-app.service`.
