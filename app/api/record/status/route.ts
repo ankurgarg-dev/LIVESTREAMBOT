@@ -16,7 +16,7 @@ export async function GET(req: NextRequest) {
       isRecording: active.length > 0,
       activeEgress: active.map((item) => ({
         egressId: item.egressId,
-        startedAt: item.startedAt,
+        startedAt: item.startedAt ? item.startedAt.toString() : null,
         status: item.status,
       })),
     });
