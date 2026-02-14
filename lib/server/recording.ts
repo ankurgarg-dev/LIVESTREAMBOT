@@ -20,7 +20,8 @@ function normalizedLiveKitHost(rawUrl: string): string {
   const parsed = new URL(rawUrl);
   if (parsed.protocol === 'ws:') parsed.protocol = 'http:';
   if (parsed.protocol === 'wss:') parsed.protocol = 'https:';
-  return parsed.origin;
+  const path = parsed.pathname.replace(/\/+$/g, '');
+  return path ? `${parsed.origin}${path}` : parsed.origin;
 }
 
 function sanitizePathFragment(value: string): string {
