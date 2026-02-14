@@ -63,7 +63,8 @@ function buildFilePath(roomName: string): string {
 }
 
 export function createEgressClient(): EgressClient {
-  const livekitUrl = requireEnv('LIVEKIT_URL');
+  const livekitUrl =
+    process.env.RECORDING_LIVEKIT_URL ?? process.env.LIVEKIT_EGRESS_URL ?? requireEnv('LIVEKIT_URL');
   const apiKey = requireEnv('LIVEKIT_API_KEY');
   const apiSecret = requireEnv('LIVEKIT_API_SECRET');
   return new EgressClient(normalizedLiveKitHost(livekitUrl), apiKey, apiSecret);

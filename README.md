@@ -82,6 +82,7 @@ Optional env:
 - `RECORDING_S3_ENDPOINT`
 - `RECORDING_S3_PREFIX` (default: `recordings`)
 - `RECORDING_LAYOUT` (default: `speaker`)
+- `RECORDING_LIVEKIT_URL` (optional egress-control URL, e.g. `http://127.0.0.1:7880`)
 - `RECORDING_S3_ACCESS_KEY_ID` / `RECORDING_S3_SECRET_ACCESS_KEY`
   (not required when EC2 IAM role already has S3 write permissions)
 
