@@ -1,39 +1,51 @@
-import { EgressClient } from 'livekit-server-sdk';
+import { stopRoomRecording } from '@/lib/server/recording';
 import { NextRequest, NextResponse } from 'next/server';
 
-export async function GET(req: NextRequest) {
+async function readRoomName(req: NextRequest): Promise<string | null> {
+  const fromQuery = req.nextUrl.searchParams.get('roomName');
+  if (fromQuery && fromQuery.trim()) return fromQuery.trim();
   try {
-    const roomName = req.nextUrl.searchParams.get('roomName');
-
-    /**
-     * CAUTION:
-     * for simplicity this implementation does not authenticate users and therefore allows anyone with knowledge of a roomName
-     * to start/stop recordings for that room.
-     * DO NOT USE THIS FOR PRODUCTION PURPOSES AS IS
-     */
-
-    if (roomName === null) {
-      return new NextResponse('Missing roomName parameter', { status: 403 });
+    const body = await req.json();
+    if (typeof body.roomName === 'string' && body.roomName.trim()) {
+      return body.roomName.trim();
     }
-
-    const { LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL } = process.env;
-
-    const hostURL = new URL(LIVEKIT_URL!);
-    hostURL.protocol = 'https:';
-
-    const egressClient = new EgressClient(hostURL.origin, LIVEKIT_API_KEY, LIVEKIT_API_SECRET);
-    const activeEgresses = (await egressClient.listEgress({ roomName })).filter(
-      (info) => info.status < 2,
-    );
-    if (activeEgresses.length === 0) {
-      return new NextResponse('No active recording found', { status: 404 });
-    }
-    await Promise.all(activeEgresses.map((info) => egressClient.stopEgress(info.egressId)));
-
-    return new NextResponse(null, { status: 200 });
-  } catch (error) {
-    if (error instanceof Error) {
-      return new NextResponse(error.message, { status: 500 });
-    }
+  } catch {
+    // Ignore non-JSON body for backwards compatible GET usage.
   }
+  return null;
+}
+
+async function handleStop(req: NextRequest) {
+  try {
+    const roomName = await readRoomName(req);
+    if (!roomName) {
+      return NextResponse.json({ error: 'Missing roomName parameter' }, { status: 400 });
+    }
+
+    const stoppedCount = await stopRoomRecording(roomName);
+    if (stoppedCount === 0) {
+      return NextResponse.json(
+        { ok: true, roomName, status: 'not_recording', stoppedCount: 0 },
+        { status: 404 },
+      );
+    }
+
+    return NextResponse.json({
+      ok: true,
+      roomName,
+      status: 'stopped',
+      stoppedCount,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to stop room recording';
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+export async function GET(req: NextRequest) {
+  return handleStop(req);
+}
+
+export async function POST(req: NextRequest) {
+  return handleStop(req);
 }

@@ -58,3 +58,34 @@ Deploy flow:
 1. GitHub Actions builds the app.
 2. Uploads `.next` and selected app files to `s3://$DEPLOY_BUCKET/ui-update/`.
 3. Triggers AWS SSM on the EC2 instance to sync artifacts and restart `bristlecone-app.service`.
+
+## Interview Recording To S3
+
+The app includes recording APIs backed by LiveKit Egress:
+
+- `POST /api/record/start?roomName=<room>`
+- `POST /api/record/stop?roomName=<room>`
+- `GET /api/record/status?roomName=<room>`
+
+Recording output is written as MP4 into S3.
+
+Required env (server):
+
+- `LIVEKIT_URL`
+- `LIVEKIT_API_KEY`
+- `LIVEKIT_API_SECRET`
+- `RECORDING_S3_BUCKET` (or legacy `S3_BUCKET`)
+
+Optional env:
+
+- `RECORDING_S3_REGION`
+- `RECORDING_S3_ENDPOINT`
+- `RECORDING_S3_PREFIX` (default: `recordings`)
+- `RECORDING_LAYOUT` (default: `speaker`)
+- `RECORDING_S3_ACCESS_KEY_ID` / `RECORDING_S3_SECRET_ACCESS_KEY`
+  (not required when EC2 IAM role already has S3 write permissions)
+
+Frontend toggles:
+
+- `NEXT_PUBLIC_LK_RECORD_ENDPOINT=/api/record`
+- `NEXT_PUBLIC_AUTO_RECORD_INTERVIEW=true` to auto start/stop recording on room connect/disconnect

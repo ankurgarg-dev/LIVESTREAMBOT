@@ -12,8 +12,10 @@ import {
   LocalUserChoices,
   PreJoin,
   RoomContext,
+  useIsRecording,
 } from '@livekit/components-react';
 import {
+  ConnectionState,
   ExternalE2EEKeyProvider,
   RoomOptions,
   VideoCodec,
@@ -33,6 +35,8 @@ import { BristleconeVideoConference } from '@/lib/BristleconeVideoConference';
 const CONN_DETAILS_ENDPOINT =
   process.env.NEXT_PUBLIC_CONN_DETAILS_ENDPOINT ?? '/api/connection-details';
 const SHOW_SETTINGS_MENU = process.env.NEXT_PUBLIC_SHOW_SETTINGS_MENU == 'true';
+const RECORDING_ENDPOINT = process.env.NEXT_PUBLIC_LK_RECORD_ENDPOINT ?? '/api/record';
+const AUTO_RECORD_INTERVIEW = process.env.NEXT_PUBLIC_AUTO_RECORD_INTERVIEW === 'true';
 
 export function PageClientImpl(props: {
   roomName: string;
@@ -251,6 +255,61 @@ function VideoConferenceComponent(props: {
   }, []);
 
   React.useEffect(() => {
+    if (!AUTO_RECORD_INTERVIEW) return;
+    let hasRequestedStart = false;
+
+    const startRecording = async () => {
+      if (room.isE2EEEnabled || hasRequestedStart) return;
+      hasRequestedStart = true;
+      try {
+        const response = await fetch(
+          `${RECORDING_ENDPOINT}/start?roomName=${encodeURIComponent(room.name)}`,
+          { method: 'POST' },
+        );
+        if (!response.ok && response.status !== 409) {
+          const details = await response.text().catch(() => response.statusText);
+          console.error('[recording] start failed:', response.status, details);
+        }
+      } catch (error) {
+        console.error('[recording] start failed:', error);
+      }
+    };
+
+    const stopRecording = async () => {
+      if (room.isE2EEEnabled) return;
+      try {
+        const response = await fetch(
+          `${RECORDING_ENDPOINT}/stop?roomName=${encodeURIComponent(room.name)}`,
+          { method: 'POST', keepalive: true },
+        );
+        if (!response.ok && response.status !== 404) {
+          const details = await response.text().catch(() => response.statusText);
+          console.error('[recording] stop failed:', response.status, details);
+        }
+      } catch (error) {
+        console.error('[recording] stop failed:', error);
+      }
+    };
+
+    const handleConnected = () => {
+      startRecording().catch((error) => console.error('[recording] auto-start error:', error));
+    };
+    const handleDisconnected = () => {
+      stopRecording().catch((error) => console.error('[recording] auto-stop error:', error));
+    };
+
+    room.on(RoomEvent.Connected, handleConnected);
+    room.on(RoomEvent.Disconnected, handleDisconnected);
+    if (room.state === ConnectionState.Connected) {
+      handleConnected();
+    }
+    return () => {
+      room.off(RoomEvent.Connected, handleConnected);
+      room.off(RoomEvent.Disconnected, handleDisconnected);
+    };
+  }, [room]);
+
+  React.useEffect(() => {
     if (lowPowerMode) {
       console.warn('Low power mode enabled');
     }
@@ -273,9 +332,12 @@ function VideoConferenceComponent(props: {
 }
 
 function InRoomStatusHud(props: { room: Room }) {
+  const isRecording = useIsRecording();
   const [localSpeaking, setLocalSpeaking] = React.useState(false);
   const [assistantSpeaking, setAssistantSpeaking] = React.useState(false);
   const [assistantThinking, setAssistantThinking] = React.useState(false);
+  const [recordingStartedAt, setRecordingStartedAt] = React.useState<number | null>(null);
+  const [recordingElapsedSec, setRecordingElapsedSec] = React.useState(0);
 
   const hasRecentUserSpeechRef = React.useRef(false);
   const wasLocalSpeakingRef = React.useRef(false);
@@ -330,9 +392,32 @@ function InRoomStatusHud(props: { room: Room }) {
     };
   }, [props.room]);
 
+  React.useEffect(() => {
+    if (!isRecording) {
+      setRecordingStartedAt(null);
+      setRecordingElapsedSec(0);
+      return;
+    }
+    setRecordingStartedAt((prev) => prev ?? Date.now());
+  }, [isRecording]);
+
+  React.useEffect(() => {
+    if (!isRecording || recordingStartedAt === null) return;
+    const tick = () => {
+      setRecordingElapsedSec(Math.max(0, Math.floor((Date.now() - recordingStartedAt) / 1000)));
+    };
+    tick();
+    const interval = window.setInterval(tick, 1000);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [isRecording, recordingStartedAt]);
+
   const aiState = assistantSpeaking ? 'speaking' : assistantThinking ? 'thinking' : 'idle';
   const aiLabel =
     aiState === 'speaking' ? 'AI speaking' : aiState === 'thinking' ? 'AI processing...' : 'AI ready';
+  const recMinutes = String(Math.floor(recordingElapsedSec / 60)).padStart(2, '0');
+  const recSeconds = String(recordingElapsedSec % 60).padStart(2, '0');
 
   return (
     <div className="bc-status-hud" aria-live="polite">
@@ -344,6 +429,12 @@ function InRoomStatusHud(props: { room: Room }) {
         <span className={`bc-dot ${aiState === 'thinking' ? 'is-thinking' : ''}`} />
         <span>{aiLabel}</span>
       </div>
+      {isRecording ? (
+        <div className="bc-status-pill recording">
+          <span className="bc-dot is-recording" />
+          <span>{`REC ${recMinutes}:${recSeconds}`}</span>
+        </div>
+      ) : null}
     </div>
   );
 }

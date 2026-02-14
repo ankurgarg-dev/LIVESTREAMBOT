@@ -1,70 +1,48 @@
-import { EgressClient, EncodedFileOutput, S3Upload } from 'livekit-server-sdk';
+import { startRoomRecording } from '@/lib/server/recording';
 import { NextRequest, NextResponse } from 'next/server';
 
-export async function GET(req: NextRequest) {
+async function readRoomName(req: NextRequest): Promise<string | null> {
+  const fromQuery = req.nextUrl.searchParams.get('roomName');
+  if (fromQuery && fromQuery.trim()) return fromQuery.trim();
   try {
-    const roomName = req.nextUrl.searchParams.get('roomName');
-
-    /**
-     * CAUTION:
-     * for simplicity this implementation does not authenticate users and therefore allows anyone with knowledge of a roomName
-     * to start/stop recordings for that room.
-     * DO NOT USE THIS FOR PRODUCTION PURPOSES AS IS
-     */
-
-    if (roomName === null) {
-      return new NextResponse('Missing roomName parameter', { status: 403 });
+    const body = await req.json();
+    if (typeof body.roomName === 'string' && body.roomName.trim()) {
+      return body.roomName.trim();
     }
-
-    const {
-      LIVEKIT_API_KEY,
-      LIVEKIT_API_SECRET,
-      LIVEKIT_URL,
-      S3_KEY_ID,
-      S3_KEY_SECRET,
-      S3_BUCKET,
-      S3_ENDPOINT,
-      S3_REGION,
-    } = process.env;
-
-    const hostURL = new URL(LIVEKIT_URL!);
-    hostURL.protocol = 'https:';
-
-    const egressClient = new EgressClient(hostURL.origin, LIVEKIT_API_KEY, LIVEKIT_API_SECRET);
-
-    const existingEgresses = await egressClient.listEgress({ roomName });
-    if (existingEgresses.length > 0 && existingEgresses.some((e) => e.status < 2)) {
-      return new NextResponse('Meeting is already being recorded', { status: 409 });
-    }
-
-    const fileOutput = new EncodedFileOutput({
-      filepath: `${new Date(Date.now()).toISOString()}-${roomName}.mp4`,
-      output: {
-        case: 's3',
-        value: new S3Upload({
-          endpoint: S3_ENDPOINT,
-          accessKey: S3_KEY_ID,
-          secret: S3_KEY_SECRET,
-          region: S3_REGION,
-          bucket: S3_BUCKET,
-        }),
-      },
-    });
-
-    await egressClient.startRoomCompositeEgress(
-      roomName,
-      {
-        file: fileOutput,
-      },
-      {
-        layout: 'speaker',
-      },
-    );
-
-    return new NextResponse(null, { status: 200 });
-  } catch (error) {
-    if (error instanceof Error) {
-      return new NextResponse(error.message, { status: 500 });
-    }
+  } catch {
+    // Ignore non-JSON body for backwards compatible GET usage.
   }
+  return null;
+}
+
+async function handleStart(req: NextRequest) {
+  try {
+    const roomName = await readRoomName(req);
+    if (!roomName) {
+      return NextResponse.json({ error: 'Missing roomName parameter' }, { status: 400 });
+    }
+
+    const result = await startRoomRecording(roomName);
+    return NextResponse.json(
+      {
+        ok: true,
+        roomName,
+        status: result.created ? 'started' : 'already_recording',
+        egressId: result.egress.egressId,
+        filepath: result.filepath,
+      },
+      { status: result.created ? 200 : 409 },
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to start room recording';
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+export async function GET(req: NextRequest) {
+  return handleStart(req);
+}
+
+export async function POST(req: NextRequest) {
+  return handleStart(req);
 }

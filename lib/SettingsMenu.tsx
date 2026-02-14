@@ -22,7 +22,7 @@ export interface SettingsMenuProps extends React.HTMLAttributes<HTMLDivElement> 
 export function SettingsMenu(props: SettingsMenuProps) {
   const layoutContext = useMaybeLayoutContext();
   const room = useRoomContext();
-  const recordingEndpoint = process.env.NEXT_PUBLIC_LK_RECORD_ENDPOINT;
+  const recordingEndpoint = process.env.NEXT_PUBLIC_LK_RECORD_ENDPOINT ?? '/api/record';
 
   const settings = React.useMemo(() => {
     return {
@@ -58,9 +58,14 @@ export function SettingsMenu(props: SettingsMenuProps) {
     setInitialRecStatus(isRecording);
     let response: Response;
     if (isRecording) {
-      response = await fetch(recordingEndpoint + `/stop?roomName=${room.name}`);
+      response = await fetch(`${recordingEndpoint}/stop?roomName=${encodeURIComponent(room.name)}`, {
+        method: 'POST',
+      });
     } else {
-      response = await fetch(recordingEndpoint + `/start?roomName=${room.name}`);
+      response = await fetch(
+        `${recordingEndpoint}/start?roomName=${encodeURIComponent(room.name)}`,
+        { method: 'POST' },
+      );
     }
     if (response.ok) {
     } else {

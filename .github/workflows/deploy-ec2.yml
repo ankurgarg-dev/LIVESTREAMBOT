@@ -51,9 +51,10 @@ jobs:
         run: |
           set -euo pipefail
           aws s3 sync .next "s3://${DEPLOY_BUCKET}/ui-update/.next" --delete --exclude 'cache/*'
-          aws s3 cp lib/BristleconeVideoConference.tsx "s3://${DEPLOY_BUCKET}/ui-update/lib/BristleconeVideoConference.tsx"
-          aws s3 cp visualizer/ParticleHaloVisualizer.ts "s3://${DEPLOY_BUCKET}/ui-update/visualizer/ParticleHaloVisualizer.ts"
-          aws s3 cp app/page.tsx "s3://${DEPLOY_BUCKET}/ui-update/app/page.tsx"
+          aws s3 sync app "s3://${DEPLOY_BUCKET}/ui-update/app" --delete
+          aws s3 sync lib "s3://${DEPLOY_BUCKET}/ui-update/lib" --delete
+          aws s3 sync styles "s3://${DEPLOY_BUCKET}/ui-update/styles" --delete
+          aws s3 sync visualizer "s3://${DEPLOY_BUCKET}/ui-update/visualizer" --delete
           printf '%s\n' "${GITHUB_SHA}" | aws s3 cp - "s3://${DEPLOY_BUCKET}/ui-update/DEPLOYED_GIT_SHA"
 
       - name: Trigger EC2 deploy via SSM
@@ -66,9 +67,10 @@ jobs:
             "mv .next .next.bak.$(date +%s) || true",
             "mkdir -p .next",
             ("aws s3 sync s3://" + $b + "/ui-update/.next ./.next --delete --exclude \"cache/*\" --exact-timestamps"),
-            ("aws s3 cp s3://" + $b + "/ui-update/lib/BristleconeVideoConference.tsx ./lib/BristleconeVideoConference.tsx"),
-            ("aws s3 cp s3://" + $b + "/ui-update/visualizer/ParticleHaloVisualizer.ts ./visualizer/ParticleHaloVisualizer.ts"),
-            ("aws s3 cp s3://" + $b + "/ui-update/app/page.tsx ./app/page.tsx"),
+            ("aws s3 sync s3://" + $b + "/ui-update/app ./app --delete --exact-timestamps"),
+            ("aws s3 sync s3://" + $b + "/ui-update/lib ./lib --delete --exact-timestamps"),
+            ("aws s3 sync s3://" + $b + "/ui-update/styles ./styles --delete --exact-timestamps"),
+            ("aws s3 sync s3://" + $b + "/ui-update/visualizer ./visualizer --delete --exact-timestamps"),
             "sudo systemctl restart bristlecone-app.service",
             "sleep 2",
             "sudo systemctl is-active bristlecone-app.service",
