@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bristlecone Voice Visualizer</title>
+    <style>
+      :root {
+        --primary: #21a6bd;
+        --secondary: #4bc984;
+        --accent: #45afc2;
+        --dark: #192123;
+        --surface: #1f2b2f;
+        --text: #edf5f7;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: radial-gradient(circle at top right, #21343d 0%, var(--dark) 50%, #131a1b 100%);
+        color: var(--text);
+        font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+      }
+
+      .frame {
+        width: min(1080px, 96vw);
+        display: grid;
+        grid-template-columns: 1fr 320px;
+        gap: 20px;
+      }
+
+      .viz-shell {
+        border: 1px solid rgba(75, 201, 132, 0.25);
+        border-radius: 16px;
+        overflow: hidden;
+        background: #11191c;
+        min-height: 560px;
+      }
+
+      #visualizer {
+        width: 100%;
+        height: 100%;
+        min-height: 560px;
+      }
+
+      .control-panel {
+        border: 1px solid rgba(69, 175, 194, 0.35);
+        border-radius: 16px;
+        background: rgba(15, 22, 24, 0.9);
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 1.1rem;
+        font-weight: 650;
+      }
+
+      label {
+        font-size: 0.82rem;
+        color: #b9d0d5;
+      }
+
+      input,
+      select,
+      button {
+        width: 100%;
+        border-radius: 10px;
+        border: 1px solid #34535f;
+        background: var(--surface);
+        color: var(--text);
+        padding: 10px;
+        font-size: 0.92rem;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      button:hover {
+        border-color: var(--accent);
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+
+      @media (max-width: 920px) {
+        .frame {
+          grid-template-columns: 1fr;
+        }
+        .viz-shell,
+        #visualizer {
+          min-height: 420px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="frame">
+      <div class="viz-shell">
+        <div id="visualizer"></div>
+      </div>
+
+      <section class="control-panel">
+        <h1>Bristlecone Orb Visualizer</h1>
+        <label for="style-select">Style</label>
+        <select id="style-select"></select>
+
+        <label for="tts-url">TTS stream URL</label>
+        <input
+          id="tts-url"
+          type="text"
+          value="https://cdn.pixabay.com/download/audio/2022/03/15/audio_c8fa966286.mp3?filename=soft-piano-logo-113318.mp3"
+        />
+
+        <div class="row">
+          <button id="play-btn">Play / Speak</button>
+          <button id="stop-btn">Stop</button>
+        </div>
+        <div class="row">
+          <button id="thinking-btn">Set Thinking</button>
+          <button id="idle-btn">Set Idle</button>
+        </div>
+      </section>
+    </div>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
+

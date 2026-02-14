@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ES2020",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "lib": ["DOM", "ES2020"],
+    "types": ["three"]
+  },
+  "include": ["../main.ts", "./**/*.ts"]
+}
+

@@ -1,0 +1,16 @@
+{
+  "name": "bristlecone-livekit-ai-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "livekitAgent.js",
+  "scripts": {
+    "start": "node livekitAgent.js"
+  },
+  "dependencies": {
+    "@livekit/rtc-node": "^0.13.7",
+    "dotenv": "^16.4.7",
+    "livekit-server-sdk": "^2.15.0",
+    "openai": "^4.104.0"
+  }
+}
