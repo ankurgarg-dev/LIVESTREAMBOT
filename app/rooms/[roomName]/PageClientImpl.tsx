@@ -38,6 +38,16 @@ const SHOW_SETTINGS_MENU = process.env.NEXT_PUBLIC_SHOW_SETTINGS_MENU !== 'false
 const RECORDING_ENDPOINT = process.env.NEXT_PUBLIC_LK_RECORD_ENDPOINT ?? '/api/record';
 const AUTO_RECORD_INTERVIEW = process.env.NEXT_PUBLIC_AUTO_RECORD_INTERVIEW === 'true';
 
+function formatDuration(totalSeconds: number): string {
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
 export function PageClientImpl(props: {
   roomName: string;
   region?: string;
@@ -206,6 +216,48 @@ function VideoConferenceComponent(props: {
     };
   }, []);
 
+  const startRecordingBestEffort = React.useCallback(async () => {
+    if (room.isE2EEEnabled) return;
+    try {
+      const response = await fetch(
+        `${RECORDING_ENDPOINT}/start?roomName=${encodeURIComponent(room.name)}`,
+        { method: 'POST' },
+      );
+      if (!response.ok && response.status !== 409) {
+        const details = await response.text().catch(() => response.statusText);
+        console.error('[recording] start failed:', response.status, details);
+      }
+    } catch (error) {
+      console.error('[recording] start failed:', error);
+    }
+  }, [room]);
+
+  const stopRecordingBestEffort = React.useCallback(
+    async (useBeacon = false) => {
+      if (room.isE2EEEnabled) return;
+      const stopUrl = `${RECORDING_ENDPOINT}/stop?roomName=${encodeURIComponent(room.name)}`;
+      if (useBeacon && typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+        try {
+          const blob = new Blob([], { type: 'application/json' });
+          navigator.sendBeacon(stopUrl, blob);
+          return;
+        } catch {
+          // fallback to keepalive fetch below
+        }
+      }
+      try {
+        const response = await fetch(stopUrl, { method: 'POST', keepalive: true });
+        if (!response.ok && response.status !== 404) {
+          const details = await response.text().catch(() => response.statusText);
+          console.error('[recording] stop failed:', response.status, details);
+        }
+      } catch (error) {
+        console.error('[recording] stop failed:', error);
+      }
+    },
+    [room],
+  );
+
   React.useEffect(() => {
     room.on(RoomEvent.Disconnected, handleOnLeave);
     room.on(RoomEvent.EncryptionError, handleEncryptionError);
@@ -258,56 +310,47 @@ function VideoConferenceComponent(props: {
     if (!AUTO_RECORD_INTERVIEW) return;
     let hasRequestedStart = false;
 
-    const startRecording = async () => {
-      if (room.isE2EEEnabled || hasRequestedStart) return;
-      hasRequestedStart = true;
-      try {
-        const response = await fetch(
-          `${RECORDING_ENDPOINT}/start?roomName=${encodeURIComponent(room.name)}`,
-          { method: 'POST' },
-        );
-        if (!response.ok && response.status !== 409) {
-          const details = await response.text().catch(() => response.statusText);
-          console.error('[recording] start failed:', response.status, details);
-        }
-      } catch (error) {
-        console.error('[recording] start failed:', error);
-      }
-    };
-
-    const stopRecording = async () => {
-      if (room.isE2EEEnabled) return;
-      try {
-        const response = await fetch(
-          `${RECORDING_ENDPOINT}/stop?roomName=${encodeURIComponent(room.name)}`,
-          { method: 'POST', keepalive: true },
-        );
-        if (!response.ok && response.status !== 404) {
-          const details = await response.text().catch(() => response.statusText);
-          console.error('[recording] stop failed:', response.status, details);
-        }
-      } catch (error) {
-        console.error('[recording] stop failed:', error);
-      }
-    };
-
     const handleConnected = () => {
-      startRecording().catch((error) => console.error('[recording] auto-start error:', error));
-    };
-    const handleDisconnected = () => {
-      stopRecording().catch((error) => console.error('[recording] auto-stop error:', error));
+      if (hasRequestedStart) return;
+      hasRequestedStart = true;
+      startRecordingBestEffort().catch((error) =>
+        console.error('[recording] auto-start error:', error),
+      );
     };
 
     room.on(RoomEvent.Connected, handleConnected);
-    room.on(RoomEvent.Disconnected, handleDisconnected);
     if (room.state === ConnectionState.Connected) {
       handleConnected();
     }
+
     return () => {
       room.off(RoomEvent.Connected, handleConnected);
-      room.off(RoomEvent.Disconnected, handleDisconnected);
     };
-  }, [room]);
+  }, [room, startRecordingBestEffort]);
+
+  React.useEffect(() => {
+    const handleDisconnected = () => {
+      stopRecordingBestEffort(true).catch((error) =>
+        console.error('[recording] auto-stop on disconnect error:', error),
+      );
+    };
+
+    const handlePageHide = () => {
+      stopRecordingBestEffort(true).catch((error) =>
+        console.error('[recording] auto-stop on pagehide error:', error),
+      );
+    };
+
+    room.on(RoomEvent.Disconnected, handleDisconnected);
+    window.addEventListener('pagehide', handlePageHide);
+    window.addEventListener('beforeunload', handlePageHide);
+    return () => {
+      room.off(RoomEvent.Disconnected, handleDisconnected);
+      window.removeEventListener('pagehide', handlePageHide);
+      window.removeEventListener('beforeunload', handlePageHide);
+      stopRecordingBestEffort(true).catch(() => undefined);
+    };
+  }, [room, stopRecordingBestEffort]);
 
   React.useEffect(() => {
     if (lowPowerMode) {
@@ -336,6 +379,9 @@ function InRoomStatusHud(props: { room: Room }) {
   const [localSpeaking, setLocalSpeaking] = React.useState(false);
   const [assistantSpeaking, setAssistantSpeaking] = React.useState(false);
   const [assistantThinking, setAssistantThinking] = React.useState(false);
+  const [isTogglingRecording, setIsTogglingRecording] = React.useState(false);
+  const [meetingStartedAt, setMeetingStartedAt] = React.useState<number>(() => Date.now());
+  const [meetingElapsedSec, setMeetingElapsedSec] = React.useState(0);
   const [recordingStartedAt, setRecordingStartedAt] = React.useState<number | null>(null);
   const [recordingElapsedSec, setRecordingElapsedSec] = React.useState(0);
 
@@ -393,6 +439,32 @@ function InRoomStatusHud(props: { room: Room }) {
   }, [props.room]);
 
   React.useEffect(() => {
+    const resetMeetingStart = () => {
+      setMeetingStartedAt(Date.now());
+      setMeetingElapsedSec(0);
+    };
+
+    props.room.on(RoomEvent.Connected, resetMeetingStart);
+    if (props.room.state === ConnectionState.Connected) {
+      resetMeetingStart();
+    }
+    return () => {
+      props.room.off(RoomEvent.Connected, resetMeetingStart);
+    };
+  }, [props.room]);
+
+  React.useEffect(() => {
+    const tick = () => {
+      setMeetingElapsedSec(Math.max(0, Math.floor((Date.now() - meetingStartedAt) / 1000)));
+    };
+    tick();
+    const interval = window.setInterval(tick, 1000);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [meetingStartedAt]);
+
+  React.useEffect(() => {
     if (!isRecording) {
       setRecordingStartedAt(null);
       setRecordingElapsedSec(0);
@@ -416,25 +488,61 @@ function InRoomStatusHud(props: { room: Room }) {
   const aiState = assistantSpeaking ? 'speaking' : assistantThinking ? 'thinking' : 'idle';
   const aiLabel =
     aiState === 'speaking' ? 'AI speaking' : aiState === 'thinking' ? 'AI processing...' : 'AI ready';
-  const recMinutes = String(Math.floor(recordingElapsedSec / 60)).padStart(2, '0');
-  const recSeconds = String(recordingElapsedSec % 60).padStart(2, '0');
+  const meetingTimer = formatDuration(meetingElapsedSec);
+  const recordingTimer = formatDuration(recordingElapsedSec);
+
+  const toggleRecording = async () => {
+    if (props.room.isE2EEEnabled || isTogglingRecording) return;
+    setIsTogglingRecording(true);
+    const endpoint = isRecording ? 'stop' : 'start';
+    try {
+      const response = await fetch(
+        `${RECORDING_ENDPOINT}/${endpoint}?roomName=${encodeURIComponent(props.room.name)}`,
+        { method: 'POST', keepalive: true },
+      );
+      if (!response.ok && response.status !== 404 && response.status !== 409) {
+        const details = await response.text().catch(() => response.statusText);
+        console.error(`[recording] ${endpoint} failed:`, response.status, details);
+      }
+    } catch (error) {
+      console.error(`[recording] ${endpoint} failed:`, error);
+    } finally {
+      setIsTogglingRecording(false);
+    }
+  };
 
   return (
     <div className="bc-status-hud" aria-live="polite">
-      <div className={`bc-status-pill ${localSpeaking ? 'is-speaking' : ''}`}>
-        <span className="bc-dot" />
-        <span>{localSpeaking ? 'You are speaking' : 'Mic on'}</span>
-      </div>
-      <div className={`bc-status-pill ai ${aiState === 'speaking' ? 'is-speaking' : ''}`}>
-        <span className={`bc-dot ${aiState === 'thinking' ? 'is-thinking' : ''}`} />
-        <span>{aiLabel}</span>
-      </div>
       {isRecording ? (
-        <div className="bc-status-pill recording">
+        <div className="bc-record-live" role="status" aria-live="polite">
           <span className="bc-dot is-recording" />
-          <span>{`REC ${recMinutes}:${recSeconds}`}</span>
+          <span>{`REC ${recordingTimer}`}</span>
         </div>
       ) : null}
+      <div className="bc-status-stack">
+        <div className={`bc-status-pill ${localSpeaking ? 'is-speaking' : ''}`}>
+          <span className="bc-dot" />
+          <span>{localSpeaking ? 'You are speaking' : 'Mic on'}</span>
+        </div>
+        <div className={`bc-status-pill ai ${aiState === 'speaking' ? 'is-speaking' : ''}`}>
+          <span className={`bc-dot ${aiState === 'thinking' ? 'is-thinking' : ''}`} />
+          <span>{aiLabel}</span>
+        </div>
+        <div className="bc-status-pill meeting-timer">
+          <span className="bc-dot" />
+          <span>{`Meeting ${meetingTimer}`}</span>
+        </div>
+      </div>
+      <div className="bc-room-recording-controls">
+        <button
+          type="button"
+          className="lk-button bc-room-record-button"
+          disabled={isTogglingRecording || props.room.isE2EEEnabled}
+          onClick={toggleRecording}
+        >
+          {isTogglingRecording ? 'Please wait...' : isRecording ? 'Stop Recording' : 'Start Recording'}
+        </button>
+      </div>
     </div>
   );
 }
