@@ -220,9 +220,24 @@ function formatDate(dateStr: string): string {
   return d.toLocaleString();
 }
 
+function toLocalDateInputValue(date: Date): string {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function toLocalTimeInputValue(date: Date): string {
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mm = String(date.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
 function InterviewOpsTab(props: { label: string }) {
   const router = useRouter();
   const defaultAgentRoom = 'agent-test-room';
+  const [scheduledDate, setScheduledDate] = useState(() => toLocalDateInputValue(new Date()));
+  const [scheduledTime, setScheduledTime] = useState(() => toLocalTimeInputValue(new Date()));
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [setupError, setSetupError] = useState('');
@@ -280,6 +295,15 @@ function InterviewOpsTab(props: { label: string }) {
     setSetupError('');
     setSuccessMsg('');
     const formData = new FormData(event.currentTarget);
+    const selectedDate = String(formData.get('scheduledDate') ?? '').trim();
+    const selectedTime = String(formData.get('scheduledTime') ?? '').trim();
+    if (!selectedDate || !selectedTime) {
+      setSetupError('Please select both interview date and time.');
+      return;
+    }
+    formData.set('scheduledAt', `${selectedDate}T${selectedTime}`);
+    formData.delete('scheduledDate');
+    formData.delete('scheduledTime');
     if (!String(formData.get('roomName') ?? '').trim()) {
       formData.set('roomName', defaultAgentRoom);
     }
@@ -294,6 +318,8 @@ function InterviewOpsTab(props: { label: string }) {
         throw new Error(json.error || 'Failed to create interview');
       }
       event.currentTarget.reset();
+      setScheduledDate(toLocalDateInputValue(new Date()));
+      setScheduledTime(toLocalTimeInputValue(new Date()));
       setSuccessMsg(`Interview setup saved for room ${json.interview.roomName}`);
       await refreshInterviews();
     } catch (error) {
@@ -349,9 +375,20 @@ function InterviewOpsTab(props: { label: string }) {
         <input name="jobTitle" placeholder="Job Title*" required />
         <input name="jobDepartment" placeholder="Department / Function" />
         <input
-          name="scheduledAt"
-          type="datetime-local"
-          title="Scheduled date/time"
+          name="scheduledDate"
+          type="date"
+          title="Scheduled date"
+          value={scheduledDate}
+          onChange={(e) => setScheduledDate(e.target.value)}
+          required
+        />
+        <input
+          name="scheduledTime"
+          type="time"
+          step={60}
+          title="Scheduled time"
+          value={scheduledTime}
+          onChange={(e) => setScheduledTime(e.target.value)}
           required
         />
         <input name="durationMinutes" type="number" min={5} defaultValue={45} required />

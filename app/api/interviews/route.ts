@@ -87,7 +87,13 @@ export async function POST(req: NextRequest) {
       notes: String(form.get('notes') ?? '').trim(),
     };
 
-    await ensureRoomExists(input.roomName);
+    // Room provisioning is best-effort: interview setup must still save even if
+    // the LiveKit RoomService endpoint is temporarily unavailable.
+    try {
+      await ensureRoomExists(input.roomName);
+    } catch (error) {
+      console.error('[interviews] ensureRoomExists failed, continuing with setup save:', error);
+    }
 
     let interview = await createInterview(input);
     const cvFile = form.get('cv');
