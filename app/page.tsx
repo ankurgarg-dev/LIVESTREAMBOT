@@ -292,9 +292,10 @@ function InterviewOpsTab(props: { label: string }) {
 
   const handleSetupSubmit: React.FormEventHandler<HTMLFormElement> = async (event) => {
     event.preventDefault();
+    const formEl = event.currentTarget;
     setSetupError('');
     setSuccessMsg('');
-    const formData = new FormData(event.currentTarget);
+    const formData = new FormData(formEl);
     const selectedDate = String(formData.get('scheduledDate') ?? '').trim();
     const selectedTime = String(formData.get('scheduledTime') ?? '').trim();
     if (!selectedDate || !selectedTime) {
@@ -317,7 +318,7 @@ function InterviewOpsTab(props: { label: string }) {
       if (!response.ok) {
         throw new Error(json.error || 'Failed to create interview');
       }
-      event.currentTarget.reset();
+      formEl.reset();
       setScheduledDate(toLocalDateInputValue(new Date()));
       setScheduledTime(toLocalTimeInputValue(new Date()));
       setSuccessMsg(`Interview setup saved for room ${json.interview.roomName}`);
