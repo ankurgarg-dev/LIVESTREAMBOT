@@ -115,7 +115,7 @@
 
 .tabContainer {
   width: 100%;
-  max-width: 640px;
+  max-width: 1120px;
   padding-inline: 2rem;
 }
 
@@ -144,6 +144,90 @@
   border-radius: 0.9rem;
   background: rgba(255, 255, 255, 0.94);
   box-shadow: 0 16px 34px rgba(30, 70, 90, 0.08);
+}
+
+.formGrid {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.fileLabel {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+  color: #2f4756;
+}
+
+.errorText {
+  color: #b63f4a;
+  margin: 0;
+  font-weight: 600;
+}
+
+.successText {
+  color: #1f7d62;
+  margin: 0;
+  font-weight: 600;
+}
+
+.interviewList {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.interviewCard {
+  border: 1px solid #d0dfe7;
+  border-radius: 0.8rem;
+  padding: 0.8rem;
+  background: #f8fcfe;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.interviewHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.interviewMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.8rem;
+  font-size: 0.86rem;
+  color: #405b6c;
+}
+
+.cardButtons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.reportPanel {
+  border: 1px solid #d0e0e8;
+  border-radius: 0.85rem;
+  padding: 0.9rem;
+  background: #f5fafc;
+}
+
+.reportGrid {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.assetRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 0.65rem;
+  margin-bottom: 0.65rem;
+}
+
+.assetRow a {
+  color: #1d8aa4;
+  text-decoration: underline;
 }
 
 @media (max-width: 1020px) {
