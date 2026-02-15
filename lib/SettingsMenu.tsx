@@ -85,6 +85,7 @@ export function SettingsMenu(props: SettingsMenuProps) {
           (tab) =>
             settings[tab] && (
               <button
+                type="button"
                 className={`${styles.tab} lk-button`}
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -139,7 +140,11 @@ export function SettingsMenu(props: SettingsMenuProps) {
                   ? 'Meeting is currently being recorded'
                   : 'No active recordings for this meeting'}
               </p>
-              <button disabled={processingRecRequest} onClick={() => toggleRoomRecording()}>
+              <button
+                type="button"
+                disabled={processingRecRequest}
+                onClick={() => toggleRoomRecording()}
+              >
                 {isRecording ? 'Stop' : 'Start'} Recording
               </button>
             </section>
@@ -148,6 +153,7 @@ export function SettingsMenu(props: SettingsMenuProps) {
       </div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', width: '100%' }}>
         <button
+          type="button"
           className={`lk-button`}
           onClick={() => layoutContext?.widget.dispatch?.({ msg: 'toggle_settings' })}
         >
