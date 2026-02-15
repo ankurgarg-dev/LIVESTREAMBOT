@@ -222,6 +222,7 @@ function formatDate(dateStr: string): string {
 
 function InterviewOpsTab(props: { label: string }) {
   const router = useRouter();
+  const defaultAgentRoom = 'agent-test-room';
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [setupError, setSetupError] = useState('');
@@ -279,8 +280,8 @@ function InterviewOpsTab(props: { label: string }) {
     setSetupError('');
     setSuccessMsg('');
     const formData = new FormData(event.currentTarget);
-    if (!formData.get('roomName')) {
-      formData.set('roomName', generateRoomId());
+    if (!String(formData.get('roomName') ?? '').trim()) {
+      formData.set('roomName', defaultAgentRoom);
     }
 
     try {
@@ -355,7 +356,7 @@ function InterviewOpsTab(props: { label: string }) {
         />
         <input name="durationMinutes" type="number" min={5} defaultValue={45} required />
         <input name="timezone" defaultValue={Intl.DateTimeFormat().resolvedOptions().timeZone} />
-        <input name="roomName" placeholder="Room Name (optional)" />
+        <input name="roomName" defaultValue={defaultAgentRoom} placeholder="Room Name (optional)" />
         <label className={styles.fileLabel}>
           Candidate CV
           <input name="cv" type="file" accept=".pdf,.doc,.docx,.txt" />
@@ -397,7 +398,18 @@ function InterviewOpsTab(props: { label: string }) {
                 className="lk-button"
                 onClick={() => router.push(`/rooms/${encodeURIComponent(item.roomName)}`)}
               >
-                Join Room
+                Join (Ready Page)
+              </button>
+              <button
+                type="button"
+                className="lk-button"
+                onClick={() =>
+                  router.push(
+                    `/rooms/${encodeURIComponent(item.roomName)}?autojoin=1&name=${encodeURIComponent(item.interviewerName || 'Moderator')}`,
+                  )
+                }
+              >
+                Join (Direct)
               </button>
               <button
                 type="button"

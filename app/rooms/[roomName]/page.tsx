@@ -12,6 +12,8 @@ export default async function Page({
     region?: string;
     hq?: string;
     codec?: string;
+    autojoin?: string;
+    name?: string;
   }>;
 }) {
   const _params = await params;
@@ -21,6 +23,8 @@ export default async function Page({
       ? _searchParams.codec
       : 'vp9';
   const hq = _searchParams.hq === 'true' ? true : false;
+  const autoJoin = _searchParams.autojoin === '1' || _searchParams.autojoin === 'true';
+  const participantName = typeof _searchParams.name === 'string' ? _searchParams.name : undefined;
 
   return (
     <PageClientImpl
@@ -28,6 +32,8 @@ export default async function Page({
       region={_searchParams.region}
       hq={hq}
       codec={codec}
+      autoJoin={autoJoin}
+      participantName={participantName}
     />
   );
 }

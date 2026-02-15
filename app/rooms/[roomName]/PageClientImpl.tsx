@@ -43,9 +43,13 @@ export function PageClientImpl(props: {
   region?: string;
   hq: boolean;
   codec: VideoCodec;
+  autoJoin?: boolean;
+  participantName?: string;
 }) {
   const router = useRouter();
   const [roomDraft, setRoomDraft] = React.useState(props.roomName);
+  const [autoJoinDisabled, setAutoJoinDisabled] = React.useState(false);
+  const [autoJoinError, setAutoJoinError] = React.useState('');
   const [preJoinChoices, setPreJoinChoices] = React.useState<LocalUserChoices | undefined>(
     undefined,
   );
@@ -60,7 +64,7 @@ export function PageClientImpl(props: {
     undefined,
   );
 
-  const handlePreJoinSubmit = React.useCallback(async (values: LocalUserChoices) => {
+  const fetchConnectionDetails = React.useCallback(async (values: LocalUserChoices) => {
     setPreJoinChoices(values);
     const url = new URL(CONN_DETAILS_ENDPOINT, window.location.origin);
     url.searchParams.append('roomName', props.roomName);
@@ -70,8 +74,18 @@ export function PageClientImpl(props: {
     }
     const connectionDetailsResp = await fetch(url.toString());
     const connectionDetailsData = await connectionDetailsResp.json();
+    if (!connectionDetailsResp.ok) {
+      throw new Error(connectionDetailsData?.error || connectionDetailsData?.message || 'Failed to join room');
+    }
     setConnectionDetails(connectionDetailsData);
-  }, []);
+  }, [props.region, props.roomName]);
+  const handlePreJoinSubmit = React.useCallback(
+    async (values: LocalUserChoices) => {
+      setAutoJoinError('');
+      await fetchConnectionDetails(values);
+    },
+    [fetchConnectionDetails],
+  );
   const handlePreJoinError = React.useCallback((e: any) => console.error(e), []);
   const handleSwitchRoom = React.useCallback(() => {
     const target = roomDraft.trim();
@@ -80,45 +94,87 @@ export function PageClientImpl(props: {
     router.push(`/rooms/${encodeURIComponent(target)}`);
   }, [roomDraft, props.roomName, router]);
 
+  React.useEffect(() => {
+    if (!props.autoJoin || autoJoinDisabled || preJoinChoices || connectionDetails) return;
+    const fallbackName = props.participantName?.trim() || 'Moderator';
+    fetchConnectionDetails({
+      username: fallbackName,
+      audioEnabled: true,
+      videoEnabled: true,
+      audioDeviceId: '',
+      videoDeviceId: '',
+    }).catch((error) => {
+      const message = error instanceof Error ? error.message : 'Could not auto join room';
+      setAutoJoinError(message);
+      setAutoJoinDisabled(true);
+    });
+  }, [
+    autoJoinDisabled,
+    connectionDetails,
+    fetchConnectionDetails,
+    preJoinChoices,
+    props.autoJoin,
+    props.participantName,
+  ]);
+
   return (
     <main data-lk-theme="default" style={{ height: '100%' }}>
       {connectionDetails === undefined || preJoinChoices === undefined ? (
         <div style={{ display: 'grid', placeItems: 'center', height: '100%' }}>
           <div style={{ width: '100%', maxWidth: '560px', paddingInline: '1rem' }}>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '1fr auto auto',
-                gap: '0.5rem',
-                marginBottom: '0.6rem',
-                alignItems: 'center',
-              }}
-            >
-              <input
-                type="text"
-                value={roomDraft}
-                onChange={(e) => setRoomDraft(e.target.value)}
-                placeholder="Room name"
-                aria-label="Room name"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    handleSwitchRoom();
-                  }
-                }}
-              />
-              <button className="lk-button" onClick={handleSwitchRoom}>
-                Switch Room
-              </button>
-              <button className="lk-button" onClick={() => router.push('/')}>
-                Cancel
-              </button>
-            </div>
-            <PreJoin
-              defaults={preJoinDefaults}
-              onSubmit={handlePreJoinSubmit}
-              onError={handlePreJoinError}
-            />
+            {props.autoJoin && !autoJoinDisabled ? (
+              <div style={{ display: 'grid', gap: '0.8rem' }}>
+                <h3 style={{ margin: 0 }}>Joining room...</h3>
+                <p style={{ margin: 0 }}>
+                  Connecting to <strong>{props.roomName}</strong> as{' '}
+                  <strong>{props.participantName?.trim() || 'Moderator'}</strong>.
+                </p>
+                {autoJoinError ? <p style={{ margin: 0, color: '#b33a3a' }}>{autoJoinError}</p> : null}
+                <button className="lk-button" onClick={() => setAutoJoinDisabled(true)}>
+                  Open Ready Page Instead
+                </button>
+                <button className="lk-button" onClick={() => router.push('/')}>
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr auto auto',
+                    gap: '0.5rem',
+                    marginBottom: '0.6rem',
+                    alignItems: 'center',
+                  }}
+                >
+                  <input
+                    type="text"
+                    value={roomDraft}
+                    onChange={(e) => setRoomDraft(e.target.value)}
+                    placeholder="Room name"
+                    aria-label="Room name"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleSwitchRoom();
+                      }
+                    }}
+                  />
+                  <button className="lk-button" onClick={handleSwitchRoom}>
+                    Switch Room
+                  </button>
+                  <button className="lk-button" onClick={() => router.push('/')}>
+                    Cancel
+                  </button>
+                </div>
+                <PreJoin
+                  defaults={preJoinDefaults}
+                  onSubmit={handlePreJoinSubmit}
+                  onError={handlePreJoinError}
+                />
+              </>
+            )}
           </div>
         </div>
       ) : (

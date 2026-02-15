@@ -4,6 +4,7 @@ import {
   listInterviews,
   type InterviewCreateInput,
 } from '@/lib/server/interviewStore';
+import { RoomServiceClient } from 'livekit-server-sdk';
 import { NextRequest, NextResponse } from 'next/server';
 
 function readRequiredText(form: FormData, key: string): string {
@@ -12,6 +13,42 @@ function readRequiredText(form: FormData, key: string): string {
     throw new Error(`Missing required field: ${key}`);
   }
   return value.trim();
+}
+
+function isUploadedFile(value: FormDataEntryValue | null): value is File {
+  if (!value || typeof value === 'string') return false;
+  if (typeof File !== 'undefined') return value instanceof File;
+  return typeof (value as File).arrayBuffer === 'function' && typeof (value as File).size === 'number';
+}
+
+function normalizeRoomName(raw: string): string {
+  const safe = raw.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+  return safe || 'agent-test-room';
+}
+
+function toHttpUrl(url: string): string {
+  const parsed = new URL(url);
+  if (parsed.protocol === 'ws:') parsed.protocol = 'http:';
+  if (parsed.protocol === 'wss:') parsed.protocol = 'https:';
+  return parsed.toString();
+}
+
+async function ensureRoomExists(roomName: string): Promise<void> {
+  const apiKey = process.env.LIVEKIT_API_KEY;
+  const apiSecret = process.env.LIVEKIT_API_SECRET;
+  const livekitUrl = process.env.LIVEKIT_URL;
+  if (!apiKey || !apiSecret || !livekitUrl) return;
+
+  try {
+    const client = new RoomServiceClient(toHttpUrl(livekitUrl), apiKey, apiSecret);
+    await client.createRoom({ name: roomName, emptyTimeout: 10 * 60 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.toLowerCase().includes('already exists')) {
+      return;
+    }
+    throw error;
+  }
 }
 
 export async function GET() {
@@ -33,8 +70,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'durationMinutes must be a positive number' }, { status: 400 });
     }
 
+    const requestedRoomName = String(form.get('roomName') ?? '').trim();
+    const defaultRoomName = process.env.LIVEKIT_ROOM || 'agent-test-room';
+
     const input: InterviewCreateInput = {
-      roomName: readRequiredText(form, 'roomName'),
+      roomName: normalizeRoomName(requestedRoomName || defaultRoomName),
       candidateName: readRequiredText(form, 'candidateName'),
       candidateEmail: readRequiredText(form, 'candidateEmail'),
       interviewerName: readRequiredText(form, 'interviewerName'),
@@ -47,14 +87,16 @@ export async function POST(req: NextRequest) {
       notes: String(form.get('notes') ?? '').trim(),
     };
 
+    await ensureRoomExists(input.roomName);
+
     let interview = await createInterview(input);
     const cvFile = form.get('cv');
     const jdFile = form.get('jd');
 
-    if (cvFile instanceof File && cvFile.size > 0) {
+    if (isUploadedFile(cvFile) && cvFile.size > 0) {
       interview = await attachInterviewAsset(interview.id, 'cv', cvFile);
     }
-    if (jdFile instanceof File && jdFile.size > 0) {
+    if (isUploadedFile(jdFile) && jdFile.size > 0) {
       interview = await attachInterviewAsset(interview.id, 'jd', jdFile);
     }
 

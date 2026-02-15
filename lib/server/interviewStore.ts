@@ -73,11 +73,18 @@ export type InterviewUpdateInput = Partial<
   >
 >;
 
+type UploadedFile = {
+  name: string;
+  type: string;
+  size: number;
+  arrayBuffer: () => Promise<ArrayBuffer>;
+};
+
 type InterviewStorePayload = {
   interviews: InterviewRecord[];
 };
 
-const baseDir = process.env.INTERVIEW_DATA_DIR ?? path.join(process.cwd(), '.runtime', 'interviews');
+const baseDir = process.env.INTERVIEW_DATA_DIR ?? path.join('/tmp', 'bristlecone-interviews');
 const uploadsDir = path.join(baseDir, 'uploads');
 const dbPath = path.join(baseDir, 'interviews.json');
 
@@ -163,7 +170,7 @@ export async function updateInterview(id: string, updates: InterviewUpdateInput)
 export async function attachInterviewAsset(
   id: string,
   kind: 'cv' | 'jd',
-  file: File,
+  file: UploadedFile,
 ): Promise<InterviewRecord> {
   if (!(file && typeof file.arrayBuffer === 'function' && file.size > 0)) {
     throw new Error(`Missing ${kind.toUpperCase()} file`);
