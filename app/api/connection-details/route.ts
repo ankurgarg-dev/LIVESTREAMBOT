@@ -1,5 +1,6 @@
 import { randomString } from '@/lib/client-utils';
 import { getLiveKitURL } from '@/lib/getLiveKitURL';
+import { ensureAgentInRoom } from '@/lib/server/agentControl';
 import { ConnectionDetails } from '@/lib/types';
 import { AccessToken, AccessTokenOptions, VideoGrant } from 'livekit-server-sdk';
 import { NextRequest, NextResponse } from 'next/server';
@@ -32,6 +33,10 @@ export async function GET(request: NextRequest) {
     if (participantName === null) {
       return new NextResponse('Missing required query parameter: participantName', { status: 400 });
     }
+
+    ensureAgentInRoom(roomName).catch((error) => {
+      console.error('[connection-details] agent auto-join request failed:', error);
+    });
 
     // Generate participant token
     if (!randomParticipantPostfix) {
