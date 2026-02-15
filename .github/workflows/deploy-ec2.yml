@@ -71,7 +71,7 @@ jobs:
             ("aws s3 sync s3://" + $b + "/ui-update/styles ./styles --delete --exact-timestamps"),
             ("aws s3 sync s3://" + $b + "/ui-update/visualizer ./visualizer --delete --exact-timestamps"),
             ("aws s3 sync s3://" + $b + "/ui-update/agent-service ./agent-service --delete --exact-timestamps --exclude \".env\" --exclude \"node_modules/*\""),
-            "cd /opt/bristlecone-app/agent-service && npm install --omit=dev",
+            "npm --prefix /opt/bristlecone-app/agent-service install --omit=dev",
             "sudo systemctl restart bristlecone-agent.service",
             "sudo systemctl is-active bristlecone-agent.service",
             "sudo systemctl restart bristlecone-app.service",
