@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PositionExtraction",
+  "type": "object",
+  "required": [
+    "role_title",
+    "role_family",
+    "level",
+    "interview_round_type",
+    "recommended_archetype_id",
+    "recommended_duration_minutes",
+    "must_haves",
+    "nice_to_haves",
+    "tech_stack",
+    "focus_areas",
+    "deep_dive_mode",
+    "strictness",
+    "evaluation_policy",
+    "notes_for_interviewer",
+    "confidence",
+    "missing_fields",
+    "extraction_rationale"
+  ],
+  "properties": {
+    "role_title": { "type": "string" },
+    "role_family": { "type": "string" },
+    "level": { "type": "string" },
+    "interview_round_type": { "type": "string" },
+    "recommended_archetype_id": { "type": "string" },
+    "recommended_duration_minutes": { "type": "number" },
+    "must_haves": { "type": "array", "items": { "type": "string" } },
+    "nice_to_haves": { "type": "array", "items": { "type": "string" } },
+    "tech_stack": { "type": "array", "items": { "type": "string" } },
+    "focus_areas": { "type": "array", "items": { "type": "string" } },
+    "deep_dive_mode": { "type": "string" },
+    "strictness": { "type": "string" },
+    "evaluation_policy": { "type": "string" },
+    "notes_for_interviewer": { "type": "string", "maxLength": 600 },
+    "confidence": {
+      "type": "object",
+      "required": ["role_family", "level", "must_haves", "tech_stack", "overall"],
+      "properties": {
+        "role_family": { "type": "number", "minimum": 0, "maximum": 1 },
+        "level": { "type": "number", "minimum": 0, "maximum": 1 },
+        "must_haves": { "type": "number", "minimum": 0, "maximum": 1 },
+        "tech_stack": { "type": "number", "minimum": 0, "maximum": 1 },
+        "overall": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "missing_fields": { "type": "array", "items": { "type": "string" } },
+    "extraction_rationale": {
+      "type": "object",
+      "required": ["role_family", "level"],
+      "properties": {
+        "role_family": { "type": "string" },
+        "level": { "type": "string" }
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+[
+  { "canonical": "JavaScript", "aliases": ["js", "ecmascript"] },
+  { "canonical": "TypeScript", "aliases": ["ts"] },
+  { "canonical": "Node.js", "aliases": ["node", "nodejs"] },
+  { "canonical": "React", "aliases": ["reactjs"] },
+  { "canonical": "Spring Boot", "aliases": ["spring", "springboot"] },
+  { "canonical": "AWS", "aliases": ["amazon web services"] },
+  { "canonical": "Docker", "aliases": ["containers"] },
+  { "canonical": "Kubernetes", "aliases": ["k8s"] },
+  { "canonical": "PostgreSQL", "aliases": ["postgres", "postgresql"] },
+  { "canonical": "CI/CD", "aliases": ["cicd", "continuous integration"] }
+]

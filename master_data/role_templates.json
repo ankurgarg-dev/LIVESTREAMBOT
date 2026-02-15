@@ -1,0 +1,64 @@
+{
+  "default": {
+    "archetype_id": "full_stack_general",
+    "duration_minutes": 60,
+    "must_haves": ["Problem Solving", "Communication", "Coding Fundamentals"],
+    "tech_stack": ["JavaScript", "TypeScript", "Node.js"]
+  },
+  "full_stack": {
+    "junior": { "archetype_id": "full_stack_general", "duration_minutes": 45, "must_haves": ["JavaScript", "React", "REST APIs"] },
+    "mid": { "archetype_id": "full_stack_general", "duration_minutes": 60, "must_haves": ["TypeScript", "React", "Node.js", "SQL"] },
+    "senior": { "archetype_id": "full_stack_general", "duration_minutes": 75, "must_haves": ["System Design", "TypeScript", "Node.js", "Architecture"] },
+    "lead": { "archetype_id": "full_stack_general", "duration_minutes": 90, "must_haves": ["Architecture", "System Design", "Mentoring"] },
+    "principal": { "archetype_id": "full_stack_general", "duration_minutes": 90, "must_haves": ["Architecture", "Scalability", "Leadership"] }
+  },
+  "backend": {
+    "junior": { "archetype_id": "backend_services", "duration_minutes": 45, "must_haves": ["Data Structures", "APIs", "SQL"] },
+    "mid": { "archetype_id": "backend_services", "duration_minutes": 60, "must_haves": ["Node.js", "Databases", "API Design"] },
+    "senior": { "archetype_id": "backend_services", "duration_minutes": 75, "must_haves": ["System Design", "Distributed Systems", "Performance"] },
+    "lead": { "archetype_id": "backend_services", "duration_minutes": 90, "must_haves": ["Architecture", "Distributed Systems", "Mentoring"] },
+    "principal": { "archetype_id": "backend_services", "duration_minutes": 90, "must_haves": ["Architecture", "Scalability", "Reliability"] }
+  },
+  "frontend": {
+    "junior": { "archetype_id": "frontend_ui", "duration_minutes": 45, "must_haves": ["HTML", "CSS", "JavaScript"] },
+    "mid": { "archetype_id": "frontend_ui", "duration_minutes": 60, "must_haves": ["React", "TypeScript", "State Management"] },
+    "senior": { "archetype_id": "frontend_ui", "duration_minutes": 75, "must_haves": ["UI Architecture", "Performance", "Accessibility"] },
+    "lead": { "archetype_id": "frontend_ui", "duration_minutes": 90, "must_haves": ["Frontend Architecture", "Design Systems", "Mentoring"] },
+    "principal": { "archetype_id": "frontend_ui", "duration_minutes": 90, "must_haves": ["Design Systems", "Architecture", "Leadership"] }
+  },
+  "data": {
+    "junior": { "archetype_id": "data_platform", "duration_minutes": 45, "must_haves": ["SQL", "Python", "Statistics"] },
+    "mid": { "archetype_id": "data_platform", "duration_minutes": 60, "must_haves": ["Data Modeling", "ETL", "SQL"] },
+    "senior": { "archetype_id": "data_platform", "duration_minutes": 75, "must_haves": ["Data Architecture", "Pipelines", "Optimization"] },
+    "lead": { "archetype_id": "data_platform", "duration_minutes": 90, "must_haves": ["Data Strategy", "Architecture", "Mentoring"] },
+    "principal": { "archetype_id": "data_platform", "duration_minutes": 90, "must_haves": ["Architecture", "Scalability", "Governance"] }
+  },
+  "devops": {
+    "junior": { "archetype_id": "devops_sre", "duration_minutes": 45, "must_haves": ["Linux", "Scripting", "CI/CD"] },
+    "mid": { "archetype_id": "devops_sre", "duration_minutes": 60, "must_haves": ["Docker", "Kubernetes", "AWS"] },
+    "senior": { "archetype_id": "devops_sre", "duration_minutes": 75, "must_haves": ["Reliability", "Observability", "Infrastructure as Code"] },
+    "lead": { "archetype_id": "devops_sre", "duration_minutes": 90, "must_haves": ["SRE Leadership", "Architecture", "Mentoring"] },
+    "principal": { "archetype_id": "devops_sre", "duration_minutes": 90, "must_haves": ["Reliability Strategy", "Scalability", "Leadership"] }
+  },
+  "qa": {
+    "junior": { "archetype_id": "qa_automation", "duration_minutes": 45, "must_haves": ["Testing Basics", "Bug Analysis", "Communication"] },
+    "mid": { "archetype_id": "qa_automation", "duration_minutes": 60, "must_haves": ["Automation", "API Testing", "Test Planning"] },
+    "senior": { "archetype_id": "qa_automation", "duration_minutes": 75, "must_haves": ["Automation Strategy", "Quality Engineering", "CI/CD"] },
+    "lead": { "archetype_id": "qa_automation", "duration_minutes": 90, "must_haves": ["Quality Strategy", "Leadership", "Mentoring"] },
+    "principal": { "archetype_id": "qa_automation", "duration_minutes": 90, "must_haves": ["Org Quality Strategy", "Architecture", "Leadership"] }
+  },
+  "mobile": {
+    "junior": { "archetype_id": "mobile_app", "duration_minutes": 45, "must_haves": ["Mobile Basics", "UI Development", "Debugging"] },
+    "mid": { "archetype_id": "mobile_app", "duration_minutes": 60, "must_haves": ["iOS or Android", "APIs", "Performance"] },
+    "senior": { "archetype_id": "mobile_app", "duration_minutes": 75, "must_haves": ["Mobile Architecture", "Performance", "Release Management"] },
+    "lead": { "archetype_id": "mobile_app", "duration_minutes": 90, "must_haves": ["Architecture", "Leadership", "Mentoring"] },
+    "principal": { "archetype_id": "mobile_app", "duration_minutes": 90, "must_haves": ["Architecture", "Platform Strategy", "Leadership"] }
+  },
+  "security": {
+    "junior": { "archetype_id": "security_engineering", "duration_minutes": 45, "must_haves": ["Security Fundamentals", "Threat Modeling", "Communication"] },
+    "mid": { "archetype_id": "security_engineering", "duration_minutes": 60, "must_haves": ["AppSec", "Cloud Security", "Incident Response"] },
+    "senior": { "archetype_id": "security_engineering", "duration_minutes": 75, "must_haves": ["Security Architecture", "Risk Management", "Threat Detection"] },
+    "lead": { "archetype_id": "security_engineering", "duration_minutes": 90, "must_haves": ["Security Strategy", "Leadership", "Mentoring"] },
+    "principal": { "archetype_id": "security_engineering", "duration_minutes": 90, "must_haves": ["Org Security Strategy", "Architecture", "Leadership"] }
+  }
+}

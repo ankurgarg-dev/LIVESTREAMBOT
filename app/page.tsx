@@ -414,6 +414,11 @@ function InterviewOpsTab(props: { label: string }) {
       {successMsg ? <p className={styles.successText}>{successMsg}</p> : null}
 
       <h3 style={{ marginBottom: 0 }}>Interview Meetings & Outcomes</h3>
+      <div className={styles.cardButtons}>
+        <button type="button" className="lk-button" onClick={() => router.push('/positions/new')}>
+          New Position Setup
+        </button>
+      </div>
       {loading ? <p>Loading interviews...</p> : null}
       {!loading && interviews.length === 0 ? <p>No interviews configured yet.</p> : null}
 
