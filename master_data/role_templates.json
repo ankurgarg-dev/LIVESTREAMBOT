@@ -33,6 +33,13 @@
     "lead": { "archetype_id": "data_platform", "duration_minutes": 90, "must_haves": ["Data Strategy", "Architecture", "Mentoring"] },
     "principal": { "archetype_id": "data_platform", "duration_minutes": 90, "must_haves": ["Architecture", "Scalability", "Governance"] }
   },
+  "machine_learning": {
+    "junior": { "archetype_id": "ml_genai_engineering", "duration_minutes": 45, "must_haves": ["Python", "Machine Learning Basics", "Data Handling"] },
+    "mid": { "archetype_id": "ml_genai_engineering", "duration_minutes": 60, "must_haves": ["Python", "scikit-learn", "Model Deployment", "MLOps"] },
+    "senior": { "archetype_id": "ml_genai_engineering", "duration_minutes": 75, "must_haves": ["TensorFlow or PyTorch", "MLOps", "System Design", "Production ML"] },
+    "lead": { "archetype_id": "ml_genai_engineering", "duration_minutes": 90, "must_haves": ["Technical Leadership", "LLMs", "Agentic AI", "MLOps", "Cloud Optimization"] },
+    "principal": { "archetype_id": "ml_genai_engineering", "duration_minutes": 90, "must_haves": ["AI Strategy", "Architecture", "Leadership", "Scalable ML Systems"] }
+  },
   "devops": {
     "junior": { "archetype_id": "devops_sre", "duration_minutes": 45, "must_haves": ["Linux", "Scripting", "CI/CD"] },
     "mid": { "archetype_id": "devops_sre", "duration_minutes": 60, "must_haves": ["Docker", "Kubernetes", "AWS"] },

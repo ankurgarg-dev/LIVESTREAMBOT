@@ -34,6 +34,11 @@ export async function listPositions(): Promise<PositionConfigRecord[]> {
   return payload.positions.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
 }
 
+export async function getPosition(id: string): Promise<PositionConfigRecord | undefined> {
+  const payload = await readPayload();
+  return payload.positions.find((p) => p.position_id === id);
+}
+
 export async function createPosition(input: {
   finalConfig: PositionConfigCore;
   normalizedPrefill: PositionConfigCore;
@@ -62,4 +67,36 @@ export async function createPosition(input: {
   payload.positions.push(record);
   await writePayload(payload);
   return record;
+}
+
+export async function updatePosition(
+  id: string,
+  input: {
+    finalConfig: PositionConfigCore;
+    moderatorOverridesDiff: unknown;
+    extractionConfidence?: number;
+    missingFields?: string[];
+    updatedBy?: string;
+  },
+): Promise<PositionConfigRecord> {
+  const payload = await readPayload();
+  const index = payload.positions.findIndex((entry) => entry.position_id === id);
+  if (index < 0) throw new Error('Position not found');
+  const current = payload.positions[index];
+
+  const next: PositionConfigRecord = {
+    ...current,
+    ...input.finalConfig,
+    moderator_overrides_diff: input.moderatorOverridesDiff,
+    extraction_confidence:
+      typeof input.extractionConfidence === 'number' ? input.extractionConfidence : current.extraction_confidence,
+    missing_fields: input.missingFields ?? current.missing_fields,
+    created_by: input.updatedBy || current.created_by,
+    updated_at: new Date().toISOString(),
+    version: current.version + 1,
+  };
+
+  payload.positions[index] = next;
+  await writePayload(payload);
+  return next;
 }

@@ -27,6 +27,17 @@ type PrefillApiResponse = {
   summary: string;
 };
 
+type PositionRecord = PositionConfigCore & {
+  position_id: string;
+  normalized_prefill: PositionConfigCore;
+  extraction_confidence: number;
+  missing_fields: string[];
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  version: number;
+};
+
 function emptyConfig(): PositionConfigCore {
   return {
     role_title: '',
@@ -107,12 +118,27 @@ export default function NewPositionPage() {
   const [createdBy, setCreatedBy] = React.useState('moderator');
 
   const [rawExtraction, setRawExtraction] = React.useState<unknown>(null);
+  const [editingPositionId, setEditingPositionId] = React.useState('');
   const [prefill, setPrefill] = React.useState<PositionConfigCore>(emptyConfig());
   const [finalConfig, setFinalConfig] = React.useState<PositionConfigCore>(emptyConfig());
   const [missingFields, setMissingFields] = React.useState<string[]>([]);
   const [warnings, setWarnings] = React.useState<string[]>([]);
   const [summary, setSummary] = React.useState('');
   const [confidence, setConfidence] = React.useState(0);
+  const [positions, setPositions] = React.useState<PositionRecord[]>([]);
+
+  const loadPositions = React.useCallback(async () => {
+    const response = await fetch('/api/positions', { cache: 'no-store' });
+    const json = (await response.json()) as { ok: boolean; error?: string; positions?: PositionRecord[] };
+    if (!response.ok || !json.ok) throw new Error(json.error || 'Failed to load positions');
+    setPositions(json.positions || []);
+  }, []);
+
+  React.useEffect(() => {
+    loadPositions().catch((e) => {
+      setError(e instanceof Error ? e.message : 'Failed to load positions');
+    });
+  }, [loadPositions]);
 
   const runPrefill = async () => {
     setLoading(true);
@@ -131,6 +157,7 @@ export default function NewPositionPage() {
       setRawExtraction(json.rawExtraction);
       setPrefill(json.normalizedPrefill);
       setFinalConfig(json.normalizedPrefill);
+      setEditingPositionId('');
       setMissingFields(json.missingFields || []);
       setWarnings(json.warnings || []);
       setSummary(json.summary || 'Prefill completed.');
@@ -145,7 +172,12 @@ export default function NewPositionPage() {
 
   const onRoleOrLevelChange = (patch: Partial<PositionConfigCore>) => {
     const next = { ...finalConfig, ...patch };
-    setFinalConfig(applyDeterministicMapping(next));
+    const mapped = applyDeterministicMapping(next);
+    setFinalConfig({
+      ...next,
+      archetype_id: mapped.archetype_id,
+      duration_minutes: mapped.duration_minutes,
+    });
   };
 
   const savePosition = async () => {
@@ -153,8 +185,8 @@ export default function NewPositionPage() {
     setError('');
     setSuccess('');
     try {
-      const response = await fetch('/api/positions', {
-        method: 'POST',
+      const response = await fetch(editingPositionId ? `/api/positions/${editingPositionId}` : '/api/positions', {
+        method: editingPositionId ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           rawExtraction,
@@ -167,13 +199,60 @@ export default function NewPositionPage() {
       });
       const json = (await response.json()) as { ok: boolean; error?: string; position?: { position_id: string } };
       if (!response.ok || !json.ok) throw new Error(json.error || 'Failed to save position');
-      setSuccess(`Position saved with ID ${json.position?.position_id}`);
+      setSuccess(
+        editingPositionId
+          ? `Position ${editingPositionId} updated`
+          : `Position saved with ID ${json.position?.position_id}`,
+      );
+      await loadPositions();
       setStep(3);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save position');
     } finally {
       setSaving(false);
     }
+  };
+
+  const startNew = () => {
+    setStep(1);
+    setEditingPositionId('');
+    setRawExtraction(null);
+    setPrefill(emptyConfig());
+    setFinalConfig(emptyConfig());
+    setMissingFields([]);
+    setWarnings([]);
+    setSummary('');
+    setConfidence(0);
+    setError('');
+    setSuccess('');
+  };
+
+  const startEdit = (position: PositionRecord) => {
+    setEditingPositionId(position.position_id);
+    setPrefill(position.normalized_prefill);
+    setFinalConfig({
+      role_title: position.role_title,
+      role_family: position.role_family,
+      level: position.level,
+      interview_round_type: position.interview_round_type,
+      archetype_id: position.archetype_id,
+      duration_minutes: position.duration_minutes,
+      must_haves: position.must_haves,
+      nice_to_haves: position.nice_to_haves,
+      tech_stack: position.tech_stack,
+      focus_areas: position.focus_areas,
+      deep_dive_mode: position.deep_dive_mode,
+      strictness: position.strictness,
+      evaluation_policy: position.evaluation_policy,
+      notes_for_interviewer: position.notes_for_interviewer,
+    });
+    setMissingFields(position.missing_fields || []);
+    setConfidence(position.extraction_confidence || 0);
+    setSummary(`Editing saved position ${position.position_id}`);
+    setWarnings([]);
+    setStep(2);
+    setError('');
+    setSuccess('');
   };
 
   return (
@@ -198,6 +277,33 @@ export default function NewPositionPage() {
           <button type="button" className="lk-button" onClick={runPrefill} disabled={loading}>
             {loading ? 'Prefilling...' : 'Prefill from JD'}
           </button>
+          <button type="button" className="lk-button" onClick={startNew}>
+            New Draft
+          </button>
+        </div>
+      </section>
+
+      <section className={styles.panel}>
+        <h3 style={{ margin: 0 }}>Created Positions</h3>
+        {positions.length === 0 ? <p className={styles.subtle}>No positions saved yet.</p> : null}
+        <div className={styles.list}>
+          {positions.map((position) => (
+            <div key={position.position_id} className={styles.card}>
+              <strong>{position.role_title}</strong>
+              <p className={styles.subtle}>
+                {position.role_family} / {position.level} / {position.interview_round_type} / {position.duration_minutes}
+                m
+              </p>
+              <p className={styles.subtle}>
+                Updated: {new Date(position.updated_at).toLocaleString()} | v{position.version}
+              </p>
+              <div className={styles.row}>
+                <button type="button" className="lk-button" onClick={() => startEdit(position)}>
+                  View / Edit
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
       </section>
 
@@ -334,7 +440,7 @@ export default function NewPositionPage() {
               Reset Suggestions
             </button>
             <button type="button" className="lk-button" onClick={savePosition} disabled={saving}>
-              {saving ? 'Saving...' : 'Save PositionConfig'}
+              {saving ? 'Saving...' : editingPositionId ? 'Update PositionConfig' : 'Save PositionConfig'}
             </button>
           </div>
         </section>

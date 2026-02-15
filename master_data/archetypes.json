@@ -3,6 +3,7 @@
   "backend_services",
   "frontend_ui",
   "data_platform",
+  "ml_genai_engineering",
   "devops_sre",
   "qa_automation",
   "mobile_app",

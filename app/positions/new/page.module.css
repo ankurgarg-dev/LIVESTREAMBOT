@@ -60,6 +60,20 @@
   font-size: 0.85rem;
 }
 
+.list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.card {
+  border: 1px solid #cfdee7;
+  border-radius: 0.7rem;
+  background: #ffffff;
+  padding: 0.65rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
 .warn {
   color: #b63f4a;
   font-weight: 600;
