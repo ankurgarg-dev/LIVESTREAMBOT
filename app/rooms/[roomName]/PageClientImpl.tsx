@@ -38,16 +38,6 @@ const SHOW_SETTINGS_MENU = process.env.NEXT_PUBLIC_SHOW_SETTINGS_MENU !== 'false
 const RECORDING_ENDPOINT = process.env.NEXT_PUBLIC_LK_RECORD_ENDPOINT ?? '/api/record';
 const AUTO_RECORD_INTERVIEW = process.env.NEXT_PUBLIC_AUTO_RECORD_INTERVIEW === 'true';
 
-function formatDuration(totalSeconds: number): string {
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (hours > 0) {
-    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-  }
-  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-}
-
 export function PageClientImpl(props: {
   roomName: string;
   region?: string;
@@ -379,11 +369,6 @@ function InRoomStatusHud(props: { room: Room }) {
   const [localSpeaking, setLocalSpeaking] = React.useState(false);
   const [assistantSpeaking, setAssistantSpeaking] = React.useState(false);
   const [assistantThinking, setAssistantThinking] = React.useState(false);
-  const [isTogglingRecording, setIsTogglingRecording] = React.useState(false);
-  const [meetingStartedAt, setMeetingStartedAt] = React.useState<number>(() => Date.now());
-  const [meetingElapsedSec, setMeetingElapsedSec] = React.useState(0);
-  const [recordingStartedAt, setRecordingStartedAt] = React.useState<number | null>(null);
-  const [recordingElapsedSec, setRecordingElapsedSec] = React.useState(0);
 
   const hasRecentUserSpeechRef = React.useRef(false);
   const wasLocalSpeakingRef = React.useRef(false);
@@ -438,85 +423,16 @@ function InRoomStatusHud(props: { room: Room }) {
     };
   }, [props.room]);
 
-  React.useEffect(() => {
-    const resetMeetingStart = () => {
-      setMeetingStartedAt(Date.now());
-      setMeetingElapsedSec(0);
-    };
-
-    props.room.on(RoomEvent.Connected, resetMeetingStart);
-    if (props.room.state === ConnectionState.Connected) {
-      resetMeetingStart();
-    }
-    return () => {
-      props.room.off(RoomEvent.Connected, resetMeetingStart);
-    };
-  }, [props.room]);
-
-  React.useEffect(() => {
-    const tick = () => {
-      setMeetingElapsedSec(Math.max(0, Math.floor((Date.now() - meetingStartedAt) / 1000)));
-    };
-    tick();
-    const interval = window.setInterval(tick, 1000);
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [meetingStartedAt]);
-
-  React.useEffect(() => {
-    if (!isRecording) {
-      setRecordingStartedAt(null);
-      setRecordingElapsedSec(0);
-      return;
-    }
-    setRecordingStartedAt((prev) => prev ?? Date.now());
-  }, [isRecording]);
-
-  React.useEffect(() => {
-    if (!isRecording || recordingStartedAt === null) return;
-    const tick = () => {
-      setRecordingElapsedSec(Math.max(0, Math.floor((Date.now() - recordingStartedAt) / 1000)));
-    };
-    tick();
-    const interval = window.setInterval(tick, 1000);
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [isRecording, recordingStartedAt]);
-
   const aiState = assistantSpeaking ? 'speaking' : assistantThinking ? 'thinking' : 'idle';
   const aiLabel =
     aiState === 'speaking' ? 'AI speaking' : aiState === 'thinking' ? 'AI processing...' : 'AI ready';
-  const meetingTimer = formatDuration(meetingElapsedSec);
-  const recordingTimer = formatDuration(recordingElapsedSec);
-
-  const toggleRecording = async () => {
-    if (props.room.isE2EEEnabled || isTogglingRecording) return;
-    setIsTogglingRecording(true);
-    const endpoint = isRecording ? 'stop' : 'start';
-    try {
-      const response = await fetch(
-        `${RECORDING_ENDPOINT}/${endpoint}?roomName=${encodeURIComponent(props.room.name)}`,
-        { method: 'POST', keepalive: true },
-      );
-      if (!response.ok && response.status !== 404 && response.status !== 409) {
-        const details = await response.text().catch(() => response.statusText);
-        console.error(`[recording] ${endpoint} failed:`, response.status, details);
-      }
-    } catch (error) {
-      console.error(`[recording] ${endpoint} failed:`, error);
-    } finally {
-      setIsTogglingRecording(false);
-    }
-  };
 
   return (
     <div className="bc-status-hud" aria-live="polite">
       {isRecording ? (
         <div className="bc-record-live" role="status" aria-live="polite">
           <span className="bc-dot is-recording" />
-          <span>{`REC ${recordingTimer}`}</span>
+          <span>REC</span>
         </div>
       ) : null}
       <div className="bc-status-stack">
@@ -528,20 +444,6 @@ function InRoomStatusHud(props: { room: Room }) {
           <span className={`bc-dot ${aiState === 'thinking' ? 'is-thinking' : ''}`} />
           <span>{aiLabel}</span>
         </div>
-        <div className="bc-status-pill meeting-timer">
-          <span className="bc-dot" />
-          <span>{`Meeting ${meetingTimer}`}</span>
-        </div>
-      </div>
-      <div className="bc-room-recording-controls">
-        <button
-          type="button"
-          className="lk-button bc-room-record-button"
-          disabled={isTogglingRecording || props.room.isE2EEEnabled}
-          onClick={toggleRecording}
-        >
-          {isTogglingRecording ? 'Please wait...' : isRecording ? 'Stop Recording' : 'Start Recording'}
-        </button>
       </div>
     </div>
   );

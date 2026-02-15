@@ -20,9 +20,11 @@ import {
   isTrackReference,
   useCreateLayoutContext,
   useIsSpeaking,
+  useIsRecording,
   useLocalParticipant,
   useMaybeTrackRefContext,
   usePinnedTracks,
+  useRoomContext,
   useTracks,
   type MessageFormatter,
   type TrackReference,
@@ -35,10 +37,85 @@ import { WaveformVisualizer } from '@/visualizer/WaveformVisualizer';
 import { ParticleHaloVisualizer } from '@/visualizer/ParticleHaloVisualizer';
 import { EqualizerVisualizer } from '@/visualizer/EqualizerVisualizer';
 import type { VisualizerState } from '@/visualizer/VoiceVisualizer';
+const RECORDING_ENDPOINT = process.env.NEXT_PUBLIC_LK_RECORD_ENDPOINT ?? '/api/record';
 
 export interface BristleconeVideoConferenceProps extends React.HTMLAttributes<HTMLDivElement> {
   chatMessageFormatter?: MessageFormatter;
   SettingsComponent?: React.ComponentType;
+}
+
+function formatDuration(totalSeconds: number): string {
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function ControlBarRecordingExtras({ showSettings }: { showSettings: boolean }) {
+  const room = useRoomContext();
+  const isRecording = useIsRecording();
+  const [isToggling, setIsToggling] = React.useState(false);
+  const [meetingStartedAt, setMeetingStartedAt] = React.useState<number>(() => Date.now());
+  const [meetingElapsedSec, setMeetingElapsedSec] = React.useState(0);
+
+  React.useEffect(() => {
+    const resetStart = () => setMeetingStartedAt(Date.now());
+    room.on(RoomEvent.Connected, resetStart);
+    return () => {
+      room.off(RoomEvent.Connected, resetStart);
+    };
+  }, [room]);
+
+  React.useEffect(() => {
+    const tick = () => {
+      setMeetingElapsedSec(Math.max(0, Math.floor((Date.now() - meetingStartedAt) / 1000)));
+    };
+    tick();
+    const interval = window.setInterval(tick, 1000);
+    return () => window.clearInterval(interval);
+  }, [meetingStartedAt]);
+
+  const toggleRecording = async () => {
+    if (room.isE2EEEnabled || isToggling) return;
+    setIsToggling(true);
+    const endpoint = isRecording ? 'stop' : 'start';
+    try {
+      const response = await fetch(
+        `${RECORDING_ENDPOINT}/${endpoint}?roomName=${encodeURIComponent(room.name)}`,
+        { method: 'POST', keepalive: true },
+      );
+      if (!response.ok && response.status !== 404 && response.status !== 409) {
+        const details = await response.text().catch(() => response.statusText);
+        console.error(`[recording] ${endpoint} failed:`, response.status, details);
+      }
+    } catch (error) {
+      console.error(`[recording] ${endpoint} failed:`, error);
+    } finally {
+      setIsToggling(false);
+    }
+  };
+
+  return (
+    <div className="bc-controlbar-row">
+      <div className="bc-controlbar-side left">
+        <div className="bc-controlbar-timer">{formatDuration(meetingElapsedSec)}</div>
+      </div>
+      <ControlBar controls={{ chat: true, settings: showSettings }} />
+      <div className="bc-controlbar-side right">
+        <button
+          type="button"
+          className={`lk-button bc-controlbar-record-toggle ${isRecording ? 'is-recording' : ''}`}
+          disabled={isToggling || room.isE2EEEnabled}
+          onClick={toggleRecording}
+        >
+          {isToggling ? 'Please wait...' : isRecording ? 'Stop Rec' : 'Start Rec'}
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function isAgentParticipant(participant?: Participant): boolean {
@@ -329,7 +406,7 @@ export function BristleconeVideoConference({
               </FocusLayoutContainer>
             </div>
           )}
-          <ControlBar controls={{ chat: true, settings: !!SettingsComponent }} />
+          <ControlBarRecordingExtras showSettings={!!SettingsComponent} />
         </div>
 
         <Chat style={{ display: showChat ? 'grid' : 'none' }} messageFormatter={chatMessageFormatter} />

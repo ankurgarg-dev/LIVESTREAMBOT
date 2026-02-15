@@ -296,14 +296,64 @@ h2 a {
   pointer-events: none;
 }
 
-.bc-room-recording-controls {
-  display: flex;
-  justify-content: flex-end;
-  pointer-events: auto;
+.bc-controlbar-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) auto minmax(140px, 1fr);
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.25rem;
 }
 
-.bc-room-record-button {
-  min-width: 160px;
+.bc-controlbar-side {
+  display: flex;
+  align-items: center;
+}
+
+.bc-controlbar-side.left {
+  justify-content: flex-start;
+}
+
+.bc-controlbar-side.right {
+  justify-content: flex-end;
+}
+
+.bc-controlbar-timer {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.38rem 0.7rem;
+  border-radius: 999px;
+  background: rgba(8, 16, 28, 0.74);
+  border: 1px solid rgba(126, 165, 201, 0.38);
+  color: #e8f2ff;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.bc-controlbar-record-toggle {
+  min-width: 118px;
+  font-size: 0.8rem !important;
+  padding-inline: 0.8rem !important;
+}
+
+.bc-controlbar-record-toggle.is-recording {
+  background: #b53a3a !important;
+  border-color: #a43030 !important;
+  color: #ffffff !important;
+}
+
+@media (max-width: 900px) {
+  .bc-controlbar-row {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    gap: 0.45rem;
+  }
+
+  .bc-controlbar-side.left,
+  .bc-controlbar-side.right {
+    justify-content: center;
+  }
 }
 
 @keyframes bc-pulse {
