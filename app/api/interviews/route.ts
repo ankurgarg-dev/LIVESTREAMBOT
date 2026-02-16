@@ -1,6 +1,7 @@
 import {
   attachInterviewAsset,
   createInterview,
+  type InterviewPositionSnapshot,
   listInterviews,
   type InterviewCreateInput,
 } from '@/lib/server/interviewStore';
@@ -24,6 +25,32 @@ function isUploadedFile(value: FormDataEntryValue | null): value is File {
 function normalizeRoomName(raw: string): string {
   const safe = raw.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
   return safe || 'agent-test-room';
+}
+
+function parsePositionSnapshot(raw: FormDataEntryValue | null): InterviewPositionSnapshot | undefined {
+  if (typeof raw !== 'string' || !raw.trim()) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as Partial<InterviewPositionSnapshot>;
+    if (!parsed || typeof parsed !== 'object') return undefined;
+    return {
+      role_title: String(parsed.role_title || '').trim(),
+      role_family: String(parsed.role_family || '').trim(),
+      level: String(parsed.level || '').trim(),
+      interview_round_type: String(parsed.interview_round_type || '').trim(),
+      archetype_id: String(parsed.archetype_id || '').trim(),
+      duration_minutes: Number(parsed.duration_minutes || 0),
+      must_haves: Array.isArray(parsed.must_haves) ? parsed.must_haves.map(String) : [],
+      nice_to_haves: Array.isArray(parsed.nice_to_haves) ? parsed.nice_to_haves.map(String) : [],
+      tech_stack: Array.isArray(parsed.tech_stack) ? parsed.tech_stack.map(String) : [],
+      focus_areas: Array.isArray(parsed.focus_areas) ? parsed.focus_areas.map(String) : [],
+      deep_dive_mode: String(parsed.deep_dive_mode || '').trim(),
+      strictness: String(parsed.strictness || '').trim(),
+      evaluation_policy: String(parsed.evaluation_policy || '').trim(),
+      notes_for_interviewer: String(parsed.notes_for_interviewer || '').slice(0, 600),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function toHttpUrl(url: string): string {
@@ -72,6 +99,10 @@ export async function POST(req: NextRequest) {
 
     const requestedRoomName = String(form.get('roomName') ?? '').trim();
     const defaultRoomName = process.env.LIVEKIT_ROOM || 'agent-test-room';
+    const positionSnapshot = parsePositionSnapshot(form.get('positionSnapshot'));
+    const positionId = String(form.get('positionId') ?? '').trim() || undefined;
+    const fallbackJobTitle = positionSnapshot?.role_title || '';
+    const durationCandidate = Number(form.get('durationMinutes') ?? positionSnapshot?.duration_minutes ?? 0);
 
     const input: InterviewCreateInput = {
       roomName: normalizeRoomName(requestedRoomName || defaultRoomName),
@@ -79,12 +110,14 @@ export async function POST(req: NextRequest) {
       candidateEmail: readRequiredText(form, 'candidateEmail'),
       interviewerName: readRequiredText(form, 'interviewerName'),
       interviewerEmail: String(form.get('interviewerEmail') ?? '').trim(),
-      jobTitle: readRequiredText(form, 'jobTitle'),
+      jobTitle: String(form.get('jobTitle') ?? fallbackJobTitle).trim() || readRequiredText(form, 'jobTitle'),
       jobDepartment: String(form.get('jobDepartment') ?? '').trim(),
       scheduledAt: readRequiredText(form, 'scheduledAt'),
-      durationMinutes: duration,
+      durationMinutes: Number.isFinite(durationCandidate) && durationCandidate > 0 ? durationCandidate : duration,
       timezone: String(form.get('timezone') ?? Intl.DateTimeFormat().resolvedOptions().timeZone).trim(),
       notes: String(form.get('notes') ?? '').trim(),
+      positionId,
+      positionSnapshot,
     };
 
     // Room provisioning is best-effort: interview setup must still save even if

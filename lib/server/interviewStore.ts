@@ -12,6 +12,23 @@ export type InterviewAssetMeta = {
   size: number;
 };
 
+export type InterviewPositionSnapshot = {
+  role_title: string;
+  role_family: string;
+  level: string;
+  interview_round_type: string;
+  archetype_id: string;
+  duration_minutes: number;
+  must_haves: string[];
+  nice_to_haves: string[];
+  tech_stack: string[];
+  focus_areas: string[];
+  deep_dive_mode: string;
+  strictness: string;
+  evaluation_policy: string;
+  notes_for_interviewer: string;
+};
+
 export type InterviewRecord = {
   id: string;
   status: InterviewStatus;
@@ -26,6 +43,8 @@ export type InterviewRecord = {
   durationMinutes: number;
   timezone: string;
   notes: string;
+  positionId?: string;
+  positionSnapshot?: InterviewPositionSnapshot;
   cv?: InterviewAssetMeta;
   jd?: InterviewAssetMeta;
   meetingActualStart?: string;
@@ -54,6 +73,8 @@ export type InterviewCreateInput = {
   durationMinutes: number;
   timezone: string;
   notes: string;
+  positionId?: string;
+  positionSnapshot?: InterviewPositionSnapshot;
 };
 
 export type InterviewUpdateInput = Partial<
@@ -142,6 +163,8 @@ export async function createInterview(input: InterviewCreateInput): Promise<Inte
     durationMinutes: input.durationMinutes,
     timezone: input.timezone,
     notes: input.notes,
+    positionId: input.positionId,
+    positionSnapshot: input.positionSnapshot,
     createdAt: now,
     updatedAt: now,
   };
