@@ -165,6 +165,56 @@ function buildPrompt(roleTitle: string, jdText: string): string {
   ].join('\n\n');
 }
 
+function toStringArray(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((item) => (typeof item === 'string' ? item.trim() : String(item ?? '').trim()))
+    .filter(Boolean);
+}
+
+function toNumber01(input: unknown, fallback = 0): number {
+  const n = typeof input === 'number' ? input : Number(input);
+  if (Number.isNaN(n)) return fallback;
+  if (n < 0) return 0;
+  if (n > 1) return 1;
+  return n;
+}
+
+function coerceExtractionCandidate(input: unknown): PositionExtraction {
+  const p = (input || {}) as Record<string, unknown>;
+  const conf = (p.confidence || {}) as Record<string, unknown>;
+  const rationale = (p.extraction_rationale || {}) as Record<string, unknown>;
+
+  return {
+    role_title: String(p.role_title || '').trim(),
+    role_family: String(p.role_family || '').trim(),
+    level: String(p.level || '').trim(),
+    interview_round_type: String(p.interview_round_type || '').trim(),
+    recommended_archetype_id: String(p.recommended_archetype_id || '').trim(),
+    recommended_duration_minutes: Number(p.recommended_duration_minutes || 0),
+    must_haves: toStringArray(p.must_haves),
+    nice_to_haves: toStringArray(p.nice_to_haves),
+    tech_stack: toStringArray(p.tech_stack),
+    focus_areas: toStringArray(p.focus_areas),
+    deep_dive_mode: String(p.deep_dive_mode || '').trim(),
+    strictness: String(p.strictness || '').trim(),
+    evaluation_policy: String(p.evaluation_policy || '').trim(),
+    notes_for_interviewer: String(p.notes_for_interviewer || '').slice(0, 600),
+    confidence: {
+      role_family: toNumber01(conf.role_family),
+      level: toNumber01(conf.level),
+      must_haves: toNumber01(conf.must_haves),
+      tech_stack: toNumber01(conf.tech_stack),
+      overall: toNumber01(conf.overall),
+    },
+    missing_fields: toStringArray(p.missing_fields),
+    extraction_rationale: {
+      role_family: typeof rationale.role_family === 'string' ? rationale.role_family : JSON.stringify(rationale.role_family ?? ''),
+      level: typeof rationale.level === 'string' ? rationale.level : JSON.stringify(rationale.level ?? ''),
+    },
+  };
+}
+
 async function callOpenAIJson(prompt: string): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -243,12 +293,12 @@ export async function extractAndPrefillPosition(input: {
 
   try {
     rawText = await callOpenAIJson(buildPrompt(roleTitle, jdText));
-    extractionObj = parseJsonWithFallback(rawText);
+    extractionObj = coerceExtractionCandidate(parseJsonWithFallback(rawText));
     let validation = validateExtractionShape(extractionObj);
 
     if (!validation.ok) {
       const fixed = await fixJsonOnce(rawText, validation.errors);
-      extractionObj = parseJsonWithFallback(fixed);
+      extractionObj = coerceExtractionCandidate(parseJsonWithFallback(fixed));
       validation = validateExtractionShape(extractionObj);
       if (!validation.ok) {
         throw new Error(`Invalid extraction after retry: ${validation.errors.join(', ')}`);
