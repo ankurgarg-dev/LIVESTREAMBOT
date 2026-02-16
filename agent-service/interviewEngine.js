@@ -1,274 +1,443 @@
 const { getInterviewByRoomName, patchInterviewByRoomName } = require('./interviewStoreClient');
+const { buildContextPack } = require('./contextPack');
+const {
+  createInitialState,
+  computeCoverageStatus,
+  buildCoverageSummary,
+  applyAnalyzerResult,
+  consumeFollowup,
+  consumeDefer,
+  incrementTopicProbeCount,
+  getTopicProbeCount,
+  applyDeterministicGates,
+} = require('./interviewStateMachine');
+const { runController } = require('./pipelines/controller');
+const { runAnalyzer } = require('./pipelines/analyzer');
+const { runFinalEvaluator } = require('./pipelines/finalEvaluator');
+const { buildFallbackQuestion } = require('./fallbackBank');
 
-const DEFAULT_STAGE_LIMIT = 4;
+const WRAPUP_BUFFER_SECONDS = Math.max(180, Number(process.env.WRAPUP_BUFFER_SECONDS || 240));
+const MUST_HAVE_SWEEP_RATIO = clampNumber(Number(process.env.MUST_HAVE_SWEEP_RATIO || 0.8), 0.5, 0.95);
+const MAX_PROBES_PER_TOPIC = Math.max(1, Number(process.env.MAX_PROBES_PER_TOPIC || 2));
 
-function clamp(value, min, max) {
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function clampNumber(value, min, max) {
+  if (Number.isNaN(value)) return min;
   return Math.max(min, Math.min(max, value));
 }
 
-function pickStages(positionSnapshot, fallbackTitle) {
-  const mustHaves = Array.isArray(positionSnapshot?.must_haves)
-    ? positionSnapshot.must_haves.filter(Boolean)
-    : [];
-  const focusAreas = Array.isArray(positionSnapshot?.focus_areas)
-    ? positionSnapshot.focus_areas.filter(Boolean)
-    : [];
-
-  const seeds = [...mustHaves, ...focusAreas];
-  const unique = Array.from(new Set(seeds.map((item) => String(item).trim()).filter(Boolean)));
-
-  if (unique.length === 0) {
-    return [
-      `core fundamentals for ${fallbackTitle || 'the role'}`,
-      'problem solving and tradeoffs',
-      'system design and scalability',
-    ];
-  }
-
-  return unique.slice(0, DEFAULT_STAGE_LIMIT);
+function toArray(value) {
+  return Array.isArray(value) ? value : [];
 }
 
-function scoreAnswer(answer, skill) {
-  const normalized = String(answer || '').toLowerCase();
-  const words = normalized.split(/\s+/g).filter(Boolean);
-  const keywordHits = String(skill || '')
-    .toLowerCase()
-    .split(/[\s/_-]+/g)
-    .filter(Boolean)
-    .reduce((sum, token) => sum + (normalized.includes(token) ? 1 : 0), 0);
+function normalizeRecommendation(value) {
+  const allowed = ['strong_hire', 'hire', 'hold', 'no_hire'];
+  return allowed.includes(value) ? value : 'hold';
+}
 
-  const depthSignal = clamp(words.length / 55, 0, 1);
-  const coverageSignal = clamp(keywordHits / 3, 0, 1);
-  const total = clamp(Math.round((depthSignal * 0.6 + coverageSignal * 0.4) * 5), 1, 5);
+function firstSentence(text) {
+  const str = String(text || '').trim();
+  if (!str) return '';
+  const m = str.match(/^[^.!?]*[.!?]/);
+  return m ? m[0].trim() : str;
+}
 
-  return {
-    score: total,
-    notes:
-      total >= 4
-        ? 'Strong depth and relevant examples.'
-        : total >= 3
-          ? 'Reasonable response with moderate detail.'
-          : 'Needs more concrete technical depth.',
-  };
+function sanitizeQuestionText(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return '';
+  // Hard deterministic guard: one question max
+  const first = raw.split('?')[0];
+  const out = `${first.trim()}?`;
+  return out.length > 420 ? `${out.slice(0, 417)}...` : out;
+}
+
+function topOpenFollowups(state, limit = 3) {
+  return toArray(state.followup_queue).slice(0, limit);
+}
+
+function getEvidenceTail(state, limit = 8) {
+  return toArray(state.evidence_log).slice(-limit);
 }
 
 class InterviewEngine {
-  constructor({ roomName, botName = 'Bristlecone AI Agent' }) {
+  constructor({ roomName, botName = 'Bristlecone AI Agent', llmService }) {
     this.roomName = roomName;
     this.botName = botName;
+    this.llmService = llmService;
     this.interview = null;
-    this.startedAt = new Date().toISOString();
-    this.state = {
-      phase: 'intro',
-      turn: 0,
-      currentStageIndex: 0,
-      askedQuestions: 0,
-      completed: false,
-      startedAt: this.startedAt,
-    };
-    this.stages = [];
+    this.contextPack = null;
+    this.state = null;
     this.transcript = [];
-    this.answers = [];
+    this.lastControllerMeta = null;
     this.lastQuestion = '';
+    this.finalized = false;
   }
 
   async init() {
-    const interview = await getInterviewByRoomName(this.roomName);
-    this.interview = interview;
-    const title = interview?.positionSnapshot?.role_title || interview?.jobTitle || 'Software Engineer';
-    this.stages = pickStages(interview?.positionSnapshot, title);
+    this.interview = await getInterviewByRoomName(this.roomName);
+    const position = this.interview?.positionSnapshot || {};
+    const duration = Number(position.duration_minutes || this.interview?.durationMinutes || 45);
+
+    this.contextPack = buildContextPack(this.interview || {});
+    this.state = createInitialState({
+      durationMinutes: duration,
+      mustHaves: this.contextPack.must_haves,
+      focusAreas: this.contextPack.focus_areas,
+    });
 
     await this.persist({
-      meetingActualStart: interview?.meetingActualStart || new Date().toISOString(),
-      participantsJoined: interview?.participantsJoined || '',
+      meetingActualStart: this.interview?.meetingActualStart || nowIso(),
       engineState: this.state,
       enginePlan: {
-        title,
-        stages: this.stages,
+        role_title: this.contextPack.role_title,
+        must_haves: this.contextPack.must_haves,
+        focus_areas: this.contextPack.focus_areas,
+        responsibilities: this.contextPack.responsibilities,
       },
+      status: 'scheduled',
     });
   }
 
-  getSystemPrompt() {
-    const position = this.interview?.positionSnapshot;
-    const candidateName = this.interview?.candidateName || 'Candidate';
-    const interviewerName = this.interview?.interviewerName || 'Interviewer';
-    const roleTitle = position?.role_title || this.interview?.jobTitle || 'Software Engineer';
-    const level = position?.level || 'mid';
-    const roundType = position?.interview_round_type || 'standard';
-    const mustHaves = Array.isArray(position?.must_haves) ? position.must_haves.join(', ') : '';
-    const focusAreas = Array.isArray(position?.focus_areas) ? position.focus_areas.join(', ') : '';
-    const notes = position?.notes_for_interviewer || this.interview?.notes || '';
-
+  getControllerSystemPrompt() {
     return [
-      'You are an AI interview engine conducting a structured live technical interview.',
-      'Behavior: concise, professional, conversational, no markdown.',
-      `Interview context: candidate=${candidateName}, interviewer=${interviewerName}, role=${roleTitle}, level=${level}, round=${roundType}.`,
-      `Primary skills to assess: ${mustHaves || 'core technical fundamentals'}.`,
-      `Focus areas: ${focusAreas || 'problem solving, technical communication, system thinking'}.`,
-      `Moderator notes: ${notes || 'none'}.`,
-      'You must ask one interview question at a time, wait for candidate response, then ask the next targeted question.',
-      'Do not answer your own questions. Do not give long explanations unless clarifying question intent.',
-      'If candidate response is short or vague, ask a precise follow-up.',
-      'When interview is near completion and instructed to wrap up, summarize key observations briefly.',
+      'You are a structured technical interview controller.',
+      'You ask one question at a time, concise spoken phrasing, no markdown.',
+      'You enforce STAR-L, must-have coverage, and interview pacing.',
+      `Role=${this.contextPack?.role_title || 'Software Engineer'}`,
+      `Level=${this.contextPack?.level || 'mid'}`,
     ].join(' ');
   }
 
-  getKickoffInput() {
-    const candidate = this.interview?.candidateName || 'there';
-    this.lastQuestion = `Thanks for joining, ${candidate}. Let us begin with a quick introduction and then technical questions. Could you briefly walk me through your recent relevant work?`;
-    this.state.phase = 'intro';
-    this.state.askedQuestions += 1;
-    return this.lastQuestion;
+  registerParticipant(identity) {
+    const joined = String(this.interview?.participantsJoined || '').trim();
+    const set = new Set(
+      joined
+        .split(',')
+        .map((x) => x.trim())
+        .filter(Boolean),
+    );
+    if (identity) set.add(identity);
+    this.persist({ participantsJoined: Array.from(set).join(', ') }).catch(() => undefined);
   }
 
-  onCandidateUtterance(text, sourceIdentity = 'participant') {
-    const cleaned = String(text || '').trim();
-    if (!cleaned) return;
-    this.state.turn += 1;
-    this.transcript.push({
-      role: 'candidate',
-      by: sourceIdentity,
-      text: cleaned,
-      ts: new Date().toISOString(),
-      phase: this.state.phase,
-    });
+  async getKickoffQuestion() {
+    applyDeterministicGates(this.state);
+    const controller = await this.runControllerWithGuards('Kickoff question with concise interviewer intro.');
+    this.lastControllerMeta = controller;
 
-    const currentSkill =
-      this.stages[this.state.currentStageIndex] || this.stages[this.stages.length - 1] || 'general technical depth';
-    const scoring = scoreAnswer(cleaned, currentSkill);
-    this.answers.push({
-      skill: currentSkill,
-      score: scoring.score,
-      notes: scoring.notes,
-      answer: cleaned,
-      question: this.lastQuestion,
-    });
-  }
+    const question = sanitizeQuestionText(controller.question);
+    this.lastQuestion = question;
+    this.state.asked_questions += 1;
 
-  buildRuntimeInstruction() {
-    if (this.state.completed) {
-      return 'Interview is complete. Keep response as a short closure only.';
-    }
-
-    if (this.state.phase === 'intro') {
-      this.state.phase = 'technical';
-      const skill = this.stages[this.state.currentStageIndex] || 'core fundamentals';
-      return `Ask your first targeted technical question focused on: ${skill}. Keep it concise and practical.`;
-    }
-
-    if (this.state.phase === 'technical') {
-      const totalQuestionsTarget = Math.max(3, this.stages.length + 1);
-      if (this.state.askedQuestions >= totalQuestionsTarget) {
-        this.state.phase = 'wrapup';
-        return 'Interview question budget reached. Ask one short closing question about tradeoffs or improvements, then transition to wrap-up.';
-      }
-
-      const currentSkill = this.stages[this.state.currentStageIndex] || this.stages[this.stages.length - 1];
-      this.state.currentStageIndex = Math.min(this.state.currentStageIndex + 1, this.stages.length - 1);
-      return `Acknowledge briefly, then ask the next interview question focused on: ${currentSkill}.`;
-    }
-
-    if (this.state.phase === 'wrapup') {
-      this.state.completed = true;
-      this.state.phase = 'completed';
-      return 'Provide a concise closing statement: thank candidate and state interview is complete.';
-    }
-
-    return 'Respond briefly and professionally.';
-  }
-
-  onAssistantResponse(text) {
-    const cleaned = String(text || '').trim();
-    if (!cleaned) return;
     this.transcript.push({
       role: 'assistant',
       by: this.botName,
-      text: cleaned,
-      ts: new Date().toISOString(),
-      phase: this.state.phase,
+      text: question,
+      ts: nowIso(),
+      section: this.state.section,
+      stage: 'controller',
+      meta: controller,
     });
 
-    this.lastQuestion = cleaned;
-    this.state.askedQuestions += 1;
+    await this.persistProgress();
+    return question;
   }
 
-  buildFinalEvaluation() {
-    const scored = this.answers.filter((item) => Number.isFinite(item.score));
-    const avg = scored.length
-      ? scored.reduce((sum, item) => sum + item.score, 0) / scored.length
+  needsMustHaveSweep() {
+    const coverage = computeCoverageStatus(this.state);
+    const budget = Math.max(300, Number(this.state.total_time_budget_seconds || 300));
+    const elapsedRatio = 1 - this.state.time_remaining / budget;
+    return elapsedRatio >= MUST_HAVE_SWEEP_RATIO && coverage.pct < 1;
+  }
+
+  buildMustHaveSweepQuestion() {
+    const coverage = computeCoverageStatus(this.state);
+    const target = coverage.uncovered.slice(0, 2);
+    if (target.length === 0) return '';
+    return sanitizeQuestionText(
+      `Before we move on, please give a STAR-L example demonstrating ${target.join(' and ')} in a production context with measurable outcome`,
+    );
+  }
+
+  buildDeterministicFollowupFromAnalyzer(analyzerResult) {
+    const vagueness = toArray(analyzerResult?.vagueness_flags);
+    const contradictions = toArray(analyzerResult?.contradictions);
+    const star = analyzerResult?.star_l_completeness || {};
+
+    if (vagueness.length > 0) {
+      return 'Could you add more concrete technical detail, including architecture choices, tradeoffs, and measurable impact?';
+    }
+    if (contradictions.length > 0) {
+      return 'I heard two conflicting points. Can you reconcile them with a concrete sequence of what actually happened?';
+    }
+    if (this.lastControllerMeta?.expected_answer_format === 'STAR-L') {
+      const missing = ['S', 'T', 'A', 'R', 'L'].filter((k) => !star[k]);
+      if (missing.length > 0) {
+        return `Please fill the missing STAR-L parts: ${missing.join(', ')}.`;
+      }
+    }
+    return '';
+  }
+
+  async runControllerWithGuards(followupHint = '') {
+    applyDeterministicGates(this.state);
+
+    if (this.state.time_remaining <= WRAPUP_BUFFER_SECONDS) {
+      this.state.section = 'wrap_up';
+    }
+
+    const blockingFollowup = consumeFollowup(this.state);
+    const deferred = !blockingFollowup ? consumeDefer(this.state) : null;
+    const selectedFollowup = blockingFollowup || deferred;
+
+    const coverageSummary = buildCoverageSummary(this.state);
+    const evidenceTail = getEvidenceTail(this.state);
+    const transcriptTail = this.transcript.slice(-10);
+
+    let controller = null;
+    if (selectedFollowup && getTopicProbeCount(this.state, selectedFollowup.skill) >= MAX_PROBES_PER_TOPIC) {
+      controller = {
+        section: this.state.section,
+        ...buildFallbackQuestion({
+          roleFamily: this.contextPack?.role_family,
+          section: this.state.section,
+          askedQuestions: this.state.asked_questions,
+          uncoveredMustHaves: computeCoverageStatus(this.state).uncovered,
+        }),
+      };
+    } else {
+      controller = await runController({
+        llmService: this.llmService,
+        contextPack: this.contextPack,
+        state: this.state,
+        transcriptTail,
+        evidenceTail,
+        coverageSummary,
+        openFollowups: topOpenFollowups(this.state, 3),
+        followupHint: selectedFollowup ? `${selectedFollowup.skill}: ${selectedFollowup.reason}` : followupHint,
+      });
+    }
+
+    if (selectedFollowup?.skill) {
+      incrementTopicProbeCount(this.state, selectedFollowup.skill);
+    }
+
+    if (this.needsMustHaveSweep() && this.state.section !== 'wrap_up') {
+      const sweepQuestion = this.buildMustHaveSweepQuestion();
+      if (sweepQuestion) {
+        controller.question = sweepQuestion;
+        controller.question_intent = 'technical_validation';
+        controller.expected_answer_format = 'STAR-L';
+        controller.must_haves_targeted = computeCoverageStatus(this.state).uncovered.slice(0, 2);
+        controller.probes = ['What was the measurable impact?', 'What tradeoff did you choose and why?'];
+        controller.timebox_seconds = 120;
+        controller.rationale = `${controller.rationale || 'controller'} | forced_must_have_sweep`;
+      }
+    }
+
+    if (this.state.section === 'wrap_up') {
+      controller.question_intent = 'wrapup';
+      controller.expected_answer_format = 'short_fact';
+      controller.timebox_seconds = Math.min(75, Number(controller.timebox_seconds || 60));
+    }
+
+    return controller;
+  }
+
+  async handleCandidateTurn(text, sourceIdentity = 'participant') {
+    const answer = String(text || '').trim();
+    if (!answer) return '';
+
+    this.transcript.push({
+      role: 'candidate',
+      by: sourceIdentity,
+      text: answer,
+      ts: nowIso(),
+      section: this.state.section,
+      stage: 'answer',
+      answer_to: this.lastQuestion,
+    });
+
+    const analyzer = await runAnalyzer({
+      llmService: this.llmService,
+      contextPack: this.contextPack,
+      state: this.state,
+      question: this.lastQuestion,
+      answer,
+      questionMeta: this.lastControllerMeta,
+    });
+
+    applyAnalyzerResult(this.state, analyzer);
+
+    const forcedFollowup = this.buildDeterministicFollowupFromAnalyzer(analyzer);
+    let controller = await this.runControllerWithGuards(forcedFollowup || '');
+
+    if (forcedFollowup) {
+      controller.question = forcedFollowup;
+      controller.question_intent = 'clarification';
+      controller.expected_answer_format = 'steps+tradeoffs';
+      controller.probes = ['Please include concrete result.', 'What did you learn and change after this?'];
+      controller.timebox_seconds = 90;
+      controller.rationale = `${controller.rationale || 'controller'} | deterministic_followup`;
+      controller.end_interview = false;
+    }
+
+    let question = sanitizeQuestionText(controller.question);
+    if (!question) {
+      const fallback = buildFallbackQuestion({
+        roleFamily: this.contextPack?.role_family,
+        section: this.state.section,
+        askedQuestions: this.state.asked_questions,
+        uncoveredMustHaves: computeCoverageStatus(this.state).uncovered,
+      });
+      question = sanitizeQuestionText(fallback.question);
+      controller = {
+        section: this.state.section,
+        ...fallback,
+      };
+    }
+
+    this.lastControllerMeta = controller;
+    this.lastQuestion = question;
+    this.state.asked_questions += 1;
+    applyDeterministicGates(this.state);
+
+    if (controller.end_interview || this.state.section === 'completed') {
+      this.state.section = 'wrap_up';
+    }
+
+    this.transcript.push({
+      role: 'assistant',
+      by: this.botName,
+      text: question,
+      ts: nowIso(),
+      section: this.state.section,
+      stage: 'controller',
+      meta: controller,
+    });
+
+    await this.persistProgress();
+    return question;
+  }
+
+  buildFallbackFinal() {
+    const coverage = buildCoverageSummary(this.state);
+    const competencies = toArray(coverage.competency);
+    const avg = competencies.length
+      ? competencies.reduce((sum, c) => sum + Number(c.score || 0), 0) / competencies.length
       : 0;
-    const interviewScore = clamp(Math.round((avg / 5) * 100), 0, 100);
-    const rubricScore = clamp(Number((avg * 2).toFixed(1)), 0, 10);
+
+    const overallWeighted = clampNumber(Number(avg.toFixed(2)), 0, 4);
+    const confidence = clampNumber(
+      Number(
+        (
+          competencies.reduce((sum, c) => sum + Number(c.confidence || 0), 0) /
+          Math.max(1, competencies.length)
+        ).toFixed(2),
+      ),
+      0,
+      1,
+    );
 
     let recommendation = 'hold';
-    if (interviewScore >= 78) recommendation = 'strong_hire';
-    else if (interviewScore >= 64) recommendation = 'hire';
-    else if (interviewScore < 45) recommendation = 'no_hire';
-
-    const strengths = scored
-      .filter((item) => item.score >= 4)
-      .slice(0, 3)
-      .map((item) => item.skill);
-    const gaps = scored
-      .filter((item) => item.score <= 2)
-      .slice(0, 3)
-      .map((item) => item.skill);
-
-    const summaryFeedback = `Interview completed for ${this.interview?.candidateName || 'candidate'} on ${
-      this.interview?.jobTitle || this.interview?.positionSnapshot?.role_title || 'role'
-    }. Overall score ${interviewScore}/100 with recommendation ${recommendation}.`;
-
-    const detailedFeedback = [
-      `Assessed stages: ${this.stages.join(', ')}`,
-      strengths.length ? `Strengths: ${strengths.join(', ')}` : 'Strengths: moderate baseline communication and technical understanding.',
-      gaps.length ? `Gaps: ${gaps.join(', ')}` : 'Gaps: no critical gaps observed in sampled responses.',
-      `Total captured answers: ${this.answers.length}`,
-    ].join(' ');
+    if (overallWeighted >= 3.6 && confidence >= 0.6) recommendation = 'strong_hire';
+    else if (overallWeighted >= 3.0) recommendation = 'hire';
+    else if (overallWeighted < 2.2) recommendation = 'no_hire';
 
     return {
-      status: 'completed',
-      meetingActualEnd: new Date().toISOString(),
-      summaryFeedback,
-      detailedFeedback,
-      rubricScore,
-      interviewScore,
+      overall_weighted_score: overallWeighted,
+      confidence,
+      competency_scores: competencies,
+      must_have_coverage: toArray(coverage.must_have),
+      strengths: ['Consistent baseline communication and technical reasoning.'],
+      risks: toArray(coverage.must_have)
+        .filter((m) => !m.covered)
+        .map((m) => `Uncovered must-have: ${m.must_have}`),
       recommendation,
-      nextSteps:
-        recommendation === 'strong_hire' || recommendation === 'hire'
-          ? 'Proceed to next stage with focused system design and production depth checks.'
-          : 'Consider follow-up probing round before final decision.',
-      engineState: this.state,
-      engineScores: {
-        averageFivePoint: Number(avg.toFixed(2)),
-        answers: this.answers,
-      },
-      engineTranscript: this.transcript,
+      summary: `Final evaluation completed with ${computeCoverageStatus(this.state).covered}/${computeCoverageStatus(this.state).total} must-haves covered.`,
     };
   }
 
-  async persist(updates) {
-    await patchInterviewByRoomName(this.roomName, updates);
+  async finalize() {
+    if (this.finalized) return null;
+    this.finalized = true;
+
+    const coverageSummary = buildCoverageSummary(this.state);
+    const finalResult = await runFinalEvaluator({
+      llmService: this.llmService,
+      positionConfig: this.contextPack,
+      finalState: this.state,
+      evidenceLog: toArray(this.state.evidence_log),
+      mustHaveCoverage: toArray(coverageSummary.must_have),
+      competencyCoverage: toArray(coverageSummary.competency),
+      contradictions: toArray(this.state.contradictions),
+      answerQualityStats: this.state.answer_quality_stats,
+      transcriptSummary: this.transcript.slice(-25).map((t) => ({
+        role: t.role,
+        section: t.section,
+        text: firstSentence(t.text),
+      })),
+      candidateName: this.contextPack?.candidate_name,
+    }).catch(() => this.buildFallbackFinal());
+
+    const merged = finalResult || this.buildFallbackFinal();
+
+    const overallWeightedScore = clampNumber(Number(merged.overall_weighted_score || 0), 0, 4);
+    const rubricScore = clampNumber(Number(((overallWeightedScore / 4) * 10).toFixed(1)), 0, 10);
+    const interviewScore = clampNumber(Math.round((overallWeightedScore / 4) * 100), 0, 100);
+    const recommendation = normalizeRecommendation(String(merged.recommendation || 'hold'));
+
+    const summaryFeedback = String(merged.summary || '').trim() || 'Interview finalized with structured evaluation.';
+    const detailedFeedback = [
+      `Strengths: ${toArray(merged.strengths).join('; ') || 'N/A'}`,
+      `Risks: ${toArray(merged.risks).join('; ') || 'N/A'}`,
+      `Confidence: ${clampNumber(Number(merged.confidence || 0), 0, 1)}`,
+    ].join(' ');
+
+    const update = {
+      status: 'completed',
+      meetingActualEnd: nowIso(),
+      summaryFeedback,
+      detailedFeedback,
+      recommendation,
+      interviewScore,
+      rubricScore,
+      overallWeightedScore,
+      nextSteps:
+        recommendation === 'strong_hire' || recommendation === 'hire'
+          ? 'Proceed to next interview stage and validate role-specific depth with practical scenario discussion.'
+          : 'Run targeted follow-up interview focusing on uncovered must-haves and identified risk areas.',
+      engineState: this.state,
+      engineTranscript: this.transcript.slice(-240),
+      engineScores: {
+        final: merged,
+        coverageSummary,
+      },
+    };
+
+    await this.persist(update);
+    return update;
   }
 
   async persistProgress() {
     await this.persist({
       engineState: this.state,
-      engineTranscript: this.transcript.slice(-80),
+      engineTranscript: this.transcript.slice(-140),
       engineScores: {
-        answers: this.answers.slice(-50),
+        coverageSummary: buildCoverageSummary(this.state),
+        contradictions: toArray(this.state.contradictions).slice(-20),
       },
     });
   }
 
-  async finalize() {
-    const payload = this.buildFinalEvaluation();
-    await this.persist(payload);
-    return payload;
+  async persist(updates) {
+    await patchInterviewByRoomName(this.roomName, updates);
   }
 }
 
 module.exports = {
   InterviewEngine,
 };
-

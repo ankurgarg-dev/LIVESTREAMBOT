@@ -131,6 +131,21 @@ function buildDefaultSetup(defaultRoom: string): SetupFormState {
   };
 }
 
+function candidateKeyOf(interview: InterviewRecord): string {
+  const email = String(interview.candidateEmail || '').trim().toLowerCase();
+  const name = String(interview.candidateName || '').trim().toLowerCase();
+  return email || name;
+}
+
+function interviewRecencyTimestamp(interview: InterviewRecord): number {
+  const candidates = [interview.updatedAt, interview.meetingActualEnd, interview.scheduledAt, interview.createdAt];
+  for (const value of candidates) {
+    const ts = Date.parse(String(value || ''));
+    if (!Number.isNaN(ts)) return ts;
+  }
+  return 0;
+}
+
 function clonePosition(position: PositionRecord | PositionConfigCore): PositionConfigCore {
   return {
     role_title: position.role_title,
@@ -290,9 +305,17 @@ export default function Page() {
   };
 
   const openOutcome = (interviewId: string) => {
-    setSelectedOutcomeId(interviewId);
+    const anchor = interviews.find((item) => item.id === interviewId);
+    const key = anchor ? candidateKeyOf(anchor) : '';
+    const latestForCandidate = key
+      ? interviews
+          .filter((item) => candidateKeyOf(item) === key)
+          .sort((a, b) => interviewRecencyTimestamp(b) - interviewRecencyTimestamp(a))[0]
+      : undefined;
+    const targetId = latestForCandidate?.id || interviewId;
+    setSelectedOutcomeId(targetId);
     setActiveTab('interviews');
-    router.push(`/?tab=interviews&interviewId=${encodeURIComponent(interviewId)}`);
+    router.push(`/?tab=interviews&interviewId=${encodeURIComponent(targetId)}`);
   };
 
   const startCreateInterview = () => {

@@ -58,6 +58,43 @@ class LLMService {
     this.history.push({ role: 'assistant', content: assistantText.trim() });
     this._trimHistory();
   }
+
+  async callText(prompt, options = {}) {
+    const model = options.model || this.model;
+    const response = await this.client.chat.completions.create({
+      model,
+      messages: [
+        { role: 'system', content: this.systemPrompt },
+        { role: 'user', content: String(prompt || '') },
+      ],
+      temperature: options.temperature ?? 0.2,
+      stream: false,
+    });
+    return String(response?.choices?.[0]?.message?.content || '').trim();
+  }
+
+  async callJson(prompt, options = {}) {
+    const parse = (text) => {
+      const raw = String(text || '').trim();
+      const normalized = raw.startsWith('```')
+        ? raw.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim()
+        : raw;
+      return JSON.parse(normalized);
+    };
+
+    const text = await this.callText(prompt, options);
+    try {
+      return parse(text);
+    } catch {
+      const fixPrompt = [
+        'Fix this into valid JSON only. No markdown, no commentary.',
+        'Input:',
+        text,
+      ].join('\n');
+      const fixedText = await this.callText(fixPrompt, options);
+      return parse(fixedText);
+    }
+  }
 }
 
 module.exports = {
