@@ -16,11 +16,11 @@ class LLMService {
     this.history = [];
   }
 
-  _messages() {
-    return [
-      { role: 'system', content: this.systemPrompt },
-      ...this.history,
-    ];
+  _messages(runtimeInstruction = '') {
+    const extra = runtimeInstruction && runtimeInstruction.trim()
+      ? [{ role: 'system', content: runtimeInstruction.trim() }]
+      : [];
+    return [{ role: 'system', content: this.systemPrompt }, ...extra, ...this.history];
   }
 
   _trimHistory() {
@@ -30,7 +30,8 @@ class LLMService {
     }
   }
 
-  async *streamAssistantReply(userText) {
+  async *streamAssistantReply(userText, options = {}) {
+    const runtimeInstruction = String(options.runtimeInstruction || '');
     if (!userText || !userText.trim()) {
       return;
     }
@@ -40,7 +41,7 @@ class LLMService {
 
     const stream = await this.client.chat.completions.create({
       model: this.model,
-      messages: this._messages(),
+      messages: this._messages(runtimeInstruction),
       temperature: 0.6,
       stream: true,
     });

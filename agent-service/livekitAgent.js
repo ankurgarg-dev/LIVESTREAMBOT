@@ -18,6 +18,7 @@ const {
 
 const { LLMService } = require('./llmService');
 const { TTSService } = require('./ttsService');
+const { InterviewEngine } = require('./interviewEngine');
 
 const REQUIRED_ENV = ['OPENAI_API_KEY', 'LIVEKIT_URL', 'LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET'];
 for (const key of REQUIRED_ENV) {
@@ -349,12 +350,26 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
   let stopping = false;
   let stopped = false;
   let idleTimer = null;
+  let kickoffSent = false;
+  const participantSet = new Set();
 
   room.on(RoomEvent.ParticipantConnected, (participant) => {
     console.log(`[room:${roomName}] participant connected: ${participant.identity}`);
     if (idleTimer) {
       clearTimeout(idleTimer);
       idleTimer = null;
+    }
+    if (!isBotIdentity(participant.identity)) {
+      participantSet.add(participant.identity);
+      interviewEngine
+        .persist({
+          participantsJoined: Array.from(participantSet).join(', '),
+        })
+        .catch((err) => console.error(`[agent][${roomName}] persist participants error:`, err));
+      if (!kickoffSent) {
+        kickoffSent = true;
+        enqueueInput(interviewEngine.getKickoffInput(), 'engine_kickoff');
+      }
     }
   });
 
@@ -382,6 +397,7 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
   const llmService = new LLMService({
     apiKey: process.env.OPENAI_API_KEY,
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    systemPrompt: process.env.OPENAI_SYSTEM_PROMPT || undefined,
   });
 
   const ttsService = new TTSService({
@@ -395,6 +411,13 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
     model: process.env.OPENAI_STT_MODEL || 'gpt-4o-mini-transcribe',
     language: process.env.OPENAI_STT_LANGUAGE || undefined,
   });
+
+  const interviewEngine = new InterviewEngine({
+    roomName,
+    botName: BOT_NAME,
+  });
+  await interviewEngine.init();
+  llmService.systemPrompt = interviewEngine.getSystemPrompt();
 
   let generationChain = Promise.resolve();
   const activeInputStreams = new Map();
@@ -421,17 +444,23 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
     }
   };
 
-  const processUserInput = async (text) => {
+  const processUserInput = async (text, sourceIdentity = 'participant') => {
     const trimmed = text.trim();
     if (!trimmed) return;
 
+    if (sourceIdentity !== 'engine_kickoff') {
+      interviewEngine.onCandidateUtterance(trimmed, sourceIdentity);
+    }
+    const runtimeInstruction = interviewEngine.buildRuntimeInstruction();
     console.log(`\n[user][${roomName}] ${trimmed}`);
-    const llmStream = llmService.streamAssistantReply(trimmed);
+    const llmStream = llmService.streamAssistantReply(trimmed, { runtimeInstruction });
 
+    let assistantReply = '';
     const loggingLlmStream = (async function* () {
       process.stdout.write(`[assistant][${roomName}] `);
       for await (const delta of llmStream) {
         process.stdout.write(delta);
+        assistantReply += delta;
         yield delta;
       }
       process.stdout.write('\n');
@@ -440,11 +469,13 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
     for await (const pcmChunk of ttsService.streamFromLlmText(loggingLlmStream)) {
       await audioPump.writePcm16le(pcmChunk);
     }
+    interviewEngine.onAssistantResponse(assistantReply);
+    await interviewEngine.persistProgress();
   };
 
-  const enqueueInput = (text) => {
+  const enqueueInput = (text, sourceIdentity = 'participant') => {
     generationChain = generationChain
-      .then(() => processUserInput(text))
+      .then(() => processUserInput(text, sourceIdentity))
       .catch((err) => {
         console.error(`[agent][${roomName}] generation error:`, err);
       });
@@ -465,7 +496,7 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
       transcriptionService,
       participantIdentity: participant.identity,
       onTranscription: async (text) => {
-        enqueueInput(text);
+        enqueueInput(text, participant.identity);
       },
     });
 
@@ -501,7 +532,7 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
     if (!text) return;
 
     console.log(`\n[data][${roomName}][${participant.identity}] ${text}`);
-    enqueueInput(text);
+    enqueueInput(text, participant.identity);
   };
 
   const handleTrackSubscribed = (track, publication, participant) => {
@@ -530,7 +561,7 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
   room.on(RoomEvent.TrackUnsubscribed, handleTrackUnsubscribed);
 
   if (process.env.SIMULATED_INPUT && process.env.SIMULATED_INPUT.trim()) {
-    enqueueInput(process.env.SIMULATED_INPUT);
+    enqueueInput(process.env.SIMULATED_INPUT, 'simulated');
   }
 
   let rl = null;
@@ -543,7 +574,7 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
 
     console.log(`[agent] stdin enabled for room '${roomName}'`);
     rl.on('line', (line) => {
-      enqueueInput(line);
+      enqueueInput(line, 'stdin');
     });
   }
 
@@ -576,6 +607,9 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
     activeInputStreams.clear();
 
     await generationChain.catch(() => undefined);
+    await interviewEngine.finalize().catch((err) => {
+      console.error(`[agent][${roomName}] engine finalize error:`, err);
+    });
     await audioPump.stop();
 
     try {
