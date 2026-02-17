@@ -74,6 +74,7 @@ class InterviewEngine {
     this.lastControllerMeta = null;
     this.lastQuestion = '';
     this.finalized = false;
+    this.awaitingIntroConsent = true;
   }
 
   async init() {
@@ -111,6 +112,27 @@ class InterviewEngine {
     ].join(' ');
   }
 
+  buildIntroConsentPrompt() {
+    const durationMinutes = Number(this.state?.total_time_budget_seconds || 2700) / 60;
+    const roundedDuration = Math.max(15, Math.round(durationMinutes));
+    const candidateName = String(this.contextPack?.candidate_name || 'there').trim();
+    return [
+      `Hi ${candidateName}, welcome and thanks for joining today.`,
+      `Quick overview before we start: this interview is about ${roundedDuration} minutes.`,
+      'I will ask one question at a time and we will focus on concrete examples, tradeoffs, and measurable outcomes.',
+      'A STAR-L style answer works best: situation, task, actions, results, and what you learned.',
+      'If anything is unclear, you can ask me to repeat or clarify at any point.',
+      'Does this plan sound good, and may we begin?',
+    ].join(' ');
+  }
+
+  isConsentAffirmed(text) {
+    const t = String(text || '').trim().toLowerCase();
+    if (!t) return false;
+    if (/\b(no|not now|don\'t|do not|stop|pause|later)\b/.test(t)) return false;
+    return /\b(yes|yeah|yep|sure|ok|okay|sounds good|let\'s start|lets start|go ahead|proceed|ready)\b/.test(t);
+  }
+
   registerParticipant(identity) {
     const joined = String(this.interview?.participantsJoined || '').trim();
     const set = new Set(
@@ -124,13 +146,20 @@ class InterviewEngine {
   }
 
   async getKickoffQuestion() {
-    applyDeterministicGates(this.state);
-    const controller = await this.runControllerWithGuards('Kickoff question with concise interviewer intro.');
+    const question = this.buildIntroConsentPrompt();
+    const controller = {
+      section: 'intro',
+      question,
+      question_intent: 'wrapup',
+      expected_answer_format: 'short_fact',
+      probes: [],
+      must_haves_targeted: [],
+      timebox_seconds: 45,
+      rationale: 'deterministic_intro_consent',
+      end_interview: false,
+    };
     this.lastControllerMeta = controller;
-
-    const question = sanitizeQuestionText(controller.question);
     this.lastQuestion = question;
-    this.state.asked_questions += 1;
 
     this.transcript.push({
       role: 'assistant',
@@ -250,6 +279,83 @@ class InterviewEngine {
   async handleCandidateTurn(text, sourceIdentity = 'participant') {
     const answer = String(text || '').trim();
     if (!answer) return '';
+
+    if (this.awaitingIntroConsent && this.state.section === 'intro') {
+      this.transcript.push({
+        role: 'candidate',
+        by: sourceIdentity,
+        text: answer,
+        ts: nowIso(),
+        section: this.state.section,
+        stage: 'intro_consent',
+        answer_to: this.lastQuestion,
+      });
+
+      if (!this.isConsentAffirmed(answer)) {
+        const followup =
+          'No problem. Before we continue, please confirm when you are comfortable to start, and I can also re-explain the format briefly.';
+        this.lastQuestion = followup;
+        this.lastControllerMeta = {
+          section: 'intro',
+          question: followup,
+          question_intent: 'clarification',
+          expected_answer_format: 'short_fact',
+          probes: [],
+          must_haves_targeted: [],
+          timebox_seconds: 30,
+          rationale: 'intro_consent_reconfirm',
+          end_interview: false,
+        };
+        this.transcript.push({
+          role: 'assistant',
+          by: this.botName,
+          text: followup,
+          ts: nowIso(),
+          section: this.state.section,
+          stage: 'controller',
+          meta: this.lastControllerMeta,
+        });
+        await this.persistProgress();
+        return followup;
+      }
+
+      this.awaitingIntroConsent = false;
+      applyDeterministicGates(this.state);
+      let controller = await this.runControllerWithGuards(
+        'Kickoff question after consent. Start with a warm, low-pressure opener before deep technical probing.',
+      );
+      let question = sanitizeQuestionText(controller.question);
+      if (!question) {
+        const fallback = buildFallbackQuestion({
+          roleFamily: this.contextPack?.role_family,
+          section: this.state.section,
+          askedQuestions: this.state.asked_questions,
+          uncoveredMustHaves: computeCoverageStatus(this.state).uncovered,
+        });
+        question = sanitizeQuestionText(fallback.question);
+        controller = {
+          section: this.state.section,
+          ...fallback,
+        };
+      }
+
+      this.lastControllerMeta = controller;
+      this.lastQuestion = question;
+      this.state.asked_questions += 1;
+      applyDeterministicGates(this.state);
+
+      this.transcript.push({
+        role: 'assistant',
+        by: this.botName,
+        text: question,
+        ts: nowIso(),
+        section: this.state.section,
+        stage: 'controller',
+        meta: controller,
+      });
+      await this.persistProgress();
+      return question;
+    }
 
     this.transcript.push({
       role: 'candidate',
