@@ -1,6 +1,8 @@
 require('dotenv').config();
 
 const http = require('node:http');
+const fs = require('node:fs/promises');
+const path = require('node:path');
 const readline = require('node:readline');
 const OpenAI = require('openai');
 const { AccessToken } = require('livekit-server-sdk');
@@ -335,6 +337,32 @@ function isBotIdentity(identity) {
   return identity === BOT_IDENTITY_BASE || identity.startsWith(`${BOT_IDENTITY_BASE}-`);
 }
 
+function toHttpUrl(raw) {
+  try {
+    const u = new URL(raw);
+    if (u.protocol === 'ws:') u.protocol = 'http:';
+    if (u.protocol === 'wss:') u.protocol = 'https:';
+    return u.toString().replace(/\/+$/, '');
+  } catch {
+    return '';
+  }
+}
+
+function getAppBaseUrl() {
+  const explicit = String(process.env.AGENT_APP_BASE_URL || process.env.APP_BASE_URL || '').trim();
+  if (explicit) return explicit.replace(/\/+$/, '');
+  return toHttpUrl(process.env.LIVEKIT_URL || '');
+}
+
+function normalizeRecommendation(value) {
+  const allowed = new Set(['strong_hire', 'hire', 'hold', 'no_hire']);
+  return allowed.has(String(value || '').trim()) ? String(value).trim() : 'hold';
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
 function buildInterviewRuntimeInstruction({ candidateContext = '', roleContext = '' } = {}) {
   const contextLines = [];
   if (candidateContext) contextLines.push(`Candidate context: ${candidateContext}`);
@@ -388,6 +416,11 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
   let idleTimer = null;
   let emptyRoomStopTimer = null;
   let kickoffSent = false;
+  let interviewStarted = false;
+  let interviewStartedAt = '';
+  let finalReportPublished = false;
+  let interviewId = '';
+  const transcript = [];
 
   room.on(RoomEvent.ParticipantConnected, (participant) => {
     console.log(`[room:${roomName}] participant connected: ${participant.identity}`);
@@ -402,6 +435,9 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
     if (!isBotIdentity(participant.identity) && INTERVIEW_MODE && !kickoffSent) {
       kickoffSent = true;
       queueUserTurn('__bootstrap_interview_start__', 'agent_bootstrap');
+    }
+    if (!isBotIdentity(participant.identity)) {
+      ensureInterviewStarted().catch(() => undefined);
     }
   });
 
@@ -466,6 +502,165 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
   let processingInputQueue = false;
   let queueWorker = Promise.resolve();
   const inputQueue = [];
+  const appBaseUrl = getAppBaseUrl();
+
+  const appendTranscript = (entry) => {
+    transcript.push(entry);
+    if (transcript.length > 220) transcript.splice(0, transcript.length - 220);
+  };
+
+  const fetchLatestInterviewByRoom = async () => {
+    if (!appBaseUrl) return null;
+    const res = await fetch(`${appBaseUrl}/api/interviews`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) throw new Error(`list interviews failed (${res.status})`);
+    const json = await res.json();
+    const items = Array.isArray(json?.interviews) ? json.interviews : [];
+    return (
+      items
+        .filter((x) => String(x?.roomName || '').trim().toLowerCase() === roomName.toLowerCase())
+        .sort((a, b) => String(b?.updatedAt || b?.createdAt || '').localeCompare(String(a?.updatedAt || a?.createdAt || '')))[0] ||
+      null
+    );
+  };
+
+  const patchInterview = async (id, payload) => {
+    if (!appBaseUrl || !id) return null;
+    const res = await fetch(`${appBaseUrl}/api/interviews/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(`patch interview failed (${res.status})`);
+    const json = await res.json();
+    return json?.interview || null;
+  };
+
+  const persistLocalFallbackReport = async (report) => {
+    const outDir = process.env.AGENT_REPORT_DIR || path.join('/tmp', 'bristlecone-agent-reports');
+    await fs.mkdir(outDir, { recursive: true });
+    const outPath = path.join(outDir, `${roomName}-${Date.now()}.json`);
+    await fs.writeFile(outPath, JSON.stringify(report, null, 2), 'utf8');
+    console.log(`[agent][${roomName}] wrote fallback report to ${outPath}`);
+  };
+
+  const ensureInterviewStarted = async () => {
+    if (interviewStarted) return;
+    interviewStarted = true;
+    interviewStartedAt = nowIso();
+    try {
+      const latest = await fetchLatestInterviewByRoom();
+      if (!latest?.id) return;
+      interviewId = latest.id;
+      await patchInterview(interviewId, {
+        meetingActualStart: interviewStartedAt,
+      });
+    } catch (err) {
+      console.warn(`[agent][${roomName}] failed to mark interview start:`, err?.message || err);
+    }
+  };
+
+  const buildFallbackAssessment = (stopReason) => {
+    const turnCount = transcript.filter((t) => t.role === 'candidate').length;
+    return {
+      summaryFeedback: `Interview ended (${stopReason}) after ${turnCount} candidate turns. Report generated from available conversation.`,
+      detailedFeedback:
+        'Strengths: communication observed in conversation. Risks: limited structured evidence due to partial/non-deterministic interview flow.',
+      recommendation: 'hold',
+      interviewScore: turnCount >= 8 ? 68 : turnCount >= 4 ? 58 : 48,
+      rubricScore: turnCount >= 8 ? 6.8 : turnCount >= 4 ? 5.8 : 4.8,
+      nextSteps: 'Schedule targeted follow-up focusing on depth, architecture tradeoffs, and measurable impact examples.',
+    };
+  };
+
+  const evaluateInterview = async (stopReason) => {
+    const candidateTurns = transcript
+      .filter((t) => t.role === 'candidate')
+      .slice(-40)
+      .map((t) => ({ ts: t.ts, by: t.by, text: t.text }));
+    const assistantTurns = transcript
+      .filter((t) => t.role === 'assistant')
+      .slice(-40)
+      .map((t) => ({ ts: t.ts, text: t.text }));
+
+    if (candidateTurns.length === 0) {
+      return buildFallbackAssessment(stopReason);
+    }
+
+    const prompt = [
+      'Generate a concise interview assessment report as strict JSON only.',
+      'The interview may be incomplete. Use only available evidence and mention uncertainty if needed.',
+      `Stop reason: ${stopReason}`,
+      `Candidate turns (${candidateTurns.length}): ${JSON.stringify(candidateTurns)}`,
+      `Assistant turns (${assistantTurns.length}): ${JSON.stringify(assistantTurns)}`,
+      'Return schema:',
+      '{',
+      '  "summaryFeedback": "string <= 260 chars",',
+      '  "detailedFeedback": "string with strengths and risks",',
+      '  "recommendation": "strong_hire|hire|hold|no_hire",',
+      '  "interviewScore": number 0-100,',
+      '  "rubricScore": number 0-10,',
+      '  "nextSteps": "string"',
+      '}',
+    ].join('\n');
+
+    try {
+      const raw = await llmService.callJson(prompt, {
+        model: process.env.OPENAI_EVAL_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        temperature: 0.2,
+      });
+      const fallback = buildFallbackAssessment(stopReason);
+      return {
+        summaryFeedback: String(raw?.summaryFeedback || '').slice(0, 260) || fallback.summaryFeedback,
+        detailedFeedback: String(raw?.detailedFeedback || '').slice(0, 2000) || fallback.detailedFeedback,
+        recommendation: normalizeRecommendation(raw?.recommendation),
+        interviewScore: Math.max(0, Math.min(100, Number(raw?.interviewScore || 0) || 0)),
+        rubricScore: Math.max(0, Math.min(10, Number(raw?.rubricScore || 0) || 0)),
+        nextSteps: String(raw?.nextSteps || '').slice(0, 500) || fallback.nextSteps,
+      };
+    } catch (err) {
+      console.warn(`[agent][${roomName}] evaluation generation failed:`, err?.message || err);
+      return buildFallbackAssessment(stopReason);
+    }
+  };
+
+  const publishFinalReport = async (stopReason) => {
+    if (finalReportPublished || !interviewStarted) return;
+    finalReportPublished = true;
+    const assessment = await evaluateInterview(stopReason);
+    const update = {
+      status: 'completed',
+      meetingActualStart: interviewStartedAt || nowIso(),
+      meetingActualEnd: nowIso(),
+      summaryFeedback: assessment.summaryFeedback,
+      detailedFeedback: assessment.detailedFeedback,
+      recommendation: normalizeRecommendation(assessment.recommendation),
+      interviewScore: Math.round(Number(assessment.interviewScore || 0)),
+      rubricScore: Number(Number(assessment.rubricScore || 0).toFixed(1)),
+      nextSteps: assessment.nextSteps,
+    };
+
+    try {
+      if (!interviewId) {
+        const latest = await fetchLatestInterviewByRoom();
+        interviewId = latest?.id || '';
+      }
+      if (interviewId) {
+        await patchInterview(interviewId, update);
+        console.log(`[agent][${roomName}] published interview report for ${interviewId}`);
+        return;
+      }
+      await persistLocalFallbackReport({ roomName, stopReason, ...update, transcript: transcript.slice(-120) });
+    } catch (err) {
+      console.warn(`[agent][${roomName}] report publish failed:`, err?.message || err);
+      await persistLocalFallbackReport({ roomName, stopReason, ...update, transcript: transcript.slice(-120) }).catch(() => undefined);
+    }
+  };
 
   const extractPayload = (payload) => {
     try {
@@ -519,6 +714,7 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
 
     if (sourceIdentity !== 'agent_bootstrap') {
       console.log(`\n[user][${roomName}] ${trimmed}`);
+      appendTranscript({ role: 'candidate', by: sourceIdentity, text: trimmed, ts: nowIso() });
     }
     assistantState = 'thinking';
     interruptRequested = false;
@@ -529,12 +725,14 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
       return;
     }
 
+    let assistantText = '';
     const llmDeltaStream = llmService.streamAssistantReply(userMessage, {
       runtimeInstruction,
     });
     const guardedLlmDeltaStream = (async function* guarded() {
       for await (const delta of llmDeltaStream) {
         if (interruptRequested || (seq > 0 && seq < latestInputSeq)) break;
+        assistantText += delta;
         process.stdout.write(delta);
         yield delta;
       }
@@ -548,6 +746,9 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
     for await (const pcmChunk of ttsService.streamFromLlmText(guardedLlmDeltaStream)) {
       if (interruptRequested || (seq > 0 && seq < latestInputSeq)) break;
       await audioPump.writePcm16le(pcmChunk);
+    }
+    if (assistantText.trim()) {
+      appendTranscript({ role: 'assistant', by: BOT_NAME, text: assistantText.trim(), ts: nowIso() });
     }
     assistantState = 'idle';
   };
@@ -732,6 +933,9 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
     activeInputStreams.clear();
 
     await queueWorker.catch(() => undefined);
+    await publishFinalReport(reason).catch((err) => {
+      console.warn(`[agent][${roomName}] publishFinalReport failed:`, err?.message || err);
+    });
     if (audioPump) {
       await audioPump.stop();
     }
