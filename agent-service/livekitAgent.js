@@ -41,6 +41,7 @@ const EMPTY_ROOM_FINALIZE_DELAY_MS = Math.max(
   1000,
   Number(process.env.EMPTY_ROOM_FINALIZE_DELAY_MS || 6000),
 );
+const INTERVIEW_MODE = process.env.AGENT_INTERVIEW_MODE !== 'false';
 
 class PcmAudioPump {
   constructor(audioSource, { frameSamples = FRAME_SAMPLES, maxQueueSeconds = 3 } = {}) {
@@ -334,6 +335,31 @@ function isBotIdentity(identity) {
   return identity === BOT_IDENTITY_BASE || identity.startsWith(`${BOT_IDENTITY_BASE}-`);
 }
 
+function buildInterviewRuntimeInstruction({ candidateContext = '', roleContext = '' } = {}) {
+  const contextLines = [];
+  if (candidateContext) contextLines.push(`Candidate context: ${candidateContext}`);
+  if (roleContext) contextLines.push(`Role context: ${roleContext}`);
+  const contextBlock = contextLines.length ? `\n\nKnown context:\n${contextLines.join('\n')}` : '';
+
+  return [
+    'You are a human-like technical interviewer in a live voice call.',
+    'Do not behave like a rigid state machine.',
+    'Run a soft interview flow naturally:',
+    '1) Start with a warm intro, set expectations, and ask for consent to begin.',
+    '2) Ask about candidate background and experience relevant to role.',
+    '3) Deep dive into one or two concrete projects from the candidate CV/background.',
+    '4) Ask strong theoretical and practical follow-up questions tied to technologies from those projects.',
+    '5) End with a brief wrap-up and invite candidate questions.',
+    'Guidelines:',
+    '- Keep it conversational and adaptive.',
+    '- Ask one primary question at a time; short acknowledgement is fine.',
+    '- If candidate says they do not know, acknowledge and move forward gracefully.',
+    '- Avoid repeating the exact same question.',
+    '- Keep spoken responses concise and natural.',
+    '- Stay focused on interview content; do not drift to unrelated chit-chat.',
+  ].join(' ') + contextBlock;
+}
+
 async function createJoinToken({ roomName, identity, name }) {
   const token = new AccessToken(process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET, {
     identity,
@@ -361,6 +387,7 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
   let stopped = false;
   let idleTimer = null;
   let emptyRoomStopTimer = null;
+  let kickoffSent = false;
 
   room.on(RoomEvent.ParticipantConnected, (participant) => {
     console.log(`[room:${roomName}] participant connected: ${participant.identity}`);
@@ -371,6 +398,10 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
     if (emptyRoomStopTimer) {
       clearTimeout(emptyRoomStopTimer);
       emptyRoomStopTimer = null;
+    }
+    if (!isBotIdentity(participant.identity) && INTERVIEW_MODE && !kickoffSent) {
+      kickoffSent = true;
+      queueUserTurn('__bootstrap_interview_start__', 'agent_bootstrap');
     }
   });
 
@@ -413,7 +444,17 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
     model: process.env.OPENAI_STT_MODEL || 'gpt-4o-mini-transcribe',
     language: process.env.OPENAI_STT_LANGUAGE || undefined,
   });
-  const runtimeInstruction = String(
+  let candidateContext = String(
+    process.env.CANDIDATE_CV_TEXT || process.env.OPENAI_CV_CONTEXT_TEXT || process.env.OPENAI_CANDIDATE_CONTEXT || '',
+  )
+    .trim()
+    .replace(/\s+/g, ' ')
+    .slice(0, 4000);
+  let roleContext = String(process.env.OPENAI_ROLE_CONTEXT || process.env.JOB_CONTEXT_TEXT || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .slice(0, 2500);
+  const fallbackRuntimeInstruction = String(
     process.env.OPENAI_RUNTIME_INSTRUCTION ||
       'Have a natural spoken conversation. Keep responses brief, clear, and friendly.',
   );
@@ -426,25 +467,41 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
   let queueWorker = Promise.resolve();
   const inputQueue = [];
 
-  const extractTextPayload = (payload) => {
+  const extractPayload = (payload) => {
     try {
       const raw = TEXT_DECODER.decode(payload).trim();
-      if (!raw) return null;
+      if (!raw) return { text: null, contextUpdated: false };
 
       if (raw.startsWith('{')) {
         const parsed = JSON.parse(raw);
+        let contextUpdated = false;
+        const ctx = parsed?.context || {};
+        const cv = parsed?.cv || parsed?.resume || parsed?.candidate_cv || ctx?.cv || ctx?.resume || '';
+        const role = parsed?.role || parsed?.job || parsed?.position || ctx?.role || ctx?.job || '';
+        if (typeof cv === 'string' && cv.trim()) {
+          candidateContext = cv.trim().replace(/\s+/g, ' ').slice(0, 4000);
+          contextUpdated = true;
+        }
+        if (typeof role === 'string' && role.trim()) {
+          roleContext = role.trim().replace(/\s+/g, ' ').slice(0, 2500);
+          contextUpdated = true;
+        }
+
         const maybeText =
           parsed?.text ??
           parsed?.message ??
           parsed?.content ??
           parsed?.body?.text ??
           parsed?.payload?.text;
-        return typeof maybeText === 'string' ? maybeText.trim() : null;
+        return {
+          text: typeof maybeText === 'string' ? maybeText.trim() : null,
+          contextUpdated,
+        };
       }
 
-      return raw;
+      return { text: raw, contextUpdated: false };
     } catch {
-      return null;
+      return { text: null, contextUpdated: false };
     }
   };
 
@@ -452,7 +509,17 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
     const trimmed = text.trim();
     if (!trimmed) return;
 
-    console.log(`\n[user][${roomName}] ${trimmed}`);
+    const userMessage =
+      sourceIdentity === 'agent_bootstrap'
+        ? 'Start the interview now with a warm intro, set expectations, and ask for consent to begin.'
+        : trimmed;
+    const runtimeInstruction = INTERVIEW_MODE
+      ? buildInterviewRuntimeInstruction({ candidateContext, roleContext })
+      : fallbackRuntimeInstruction;
+
+    if (sourceIdentity !== 'agent_bootstrap') {
+      console.log(`\n[user][${roomName}] ${trimmed}`);
+    }
     assistantState = 'thinking';
     interruptRequested = false;
     process.stdout.write(`[assistant][${roomName}] `);
@@ -462,7 +529,7 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
       return;
     }
 
-    const llmDeltaStream = llmService.streamAssistantReply(trimmed, {
+    const llmDeltaStream = llmService.streamAssistantReply(userMessage, {
       runtimeInstruction,
     });
     const guardedLlmDeltaStream = (async function* guarded() {
@@ -567,7 +634,11 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
     if (!participant) return;
     if (isBotIdentity(participant.identity)) return;
 
-    const text = extractTextPayload(payload);
+    const parsed = extractPayload(payload);
+    const text = parsed.text;
+    if (parsed.contextUpdated) {
+      console.log(`[agent][${roomName}] updated candidate/role context from data payload`);
+    }
     if (!text) return;
 
     console.log(`\n[data][${roomName}][${participant.identity}] ${text}`);
