@@ -37,7 +37,6 @@ const STT_CHANNELS = 1;
 const BOT_IDENTITY_BASE = (process.env.BOT_IDENTITY || 'bristlecone-ai-agent').trim();
 const BOT_NAME = (process.env.BOT_NAME || 'Bristlecone AI Agent').trim();
 const ROOM_IDLE_TIMEOUT_MS = Math.max(30000, Number(process.env.AGENT_ROOM_IDLE_TIMEOUT_MS || 180000));
-const USER_TURN_END_DELAY_MS = Math.max(500, Number(process.env.USER_TURN_END_DELAY_MS || 2200));
 const ENABLE_BARGE_IN = process.env.ENABLE_BARGE_IN !== 'false';
 const EMPTY_ROOM_FINALIZE_DELAY_MS = Math.max(
   1000,
@@ -443,13 +442,13 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
   await interviewEngine.init();
   llmService.systemPrompt = interviewEngine.getControllerSystemPrompt();
 
-  let generationChain = Promise.resolve();
   const activeInputStreams = new Map();
   let assistantState = 'idle'; // idle | thinking | speaking
   let interruptRequested = false;
-  let pendingUserText = '';
-  let pendingUserIdentity = '';
-  let pendingUserTimer = null;
+  let latestInputSeq = 0;
+  let processingInputQueue = false;
+  let queueWorker = Promise.resolve();
+  const inputQueue = [];
 
   const extractTextPayload = (payload) => {
     try {
@@ -473,7 +472,7 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
     }
   };
 
-  const processUserInput = async (text, sourceIdentity = 'participant') => {
+  const processUserInput = async (text, sourceIdentity = 'participant', seq = 0) => {
     const trimmed = text.trim();
     if (!trimmed) return;
 
@@ -490,56 +489,56 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
     interruptRequested = false;
     process.stdout.write(`[assistant][${roomName}] ${assistantReply}\n`);
 
+    if (seq > 0 && seq < latestInputSeq) {
+      assistantState = 'idle';
+      return;
+    }
+
     assistantState = 'speaking';
     while (!audioPump) {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     for await (const pcmChunk of ttsService.streamPcm48kForText(assistantReply)) {
-      if (interruptRequested) break;
+      if (interruptRequested || (seq > 0 && seq < latestInputSeq)) break;
       await audioPump.writePcm16le(pcmChunk);
     }
     assistantState = 'idle';
     await interviewEngine.persistProgress();
   };
 
-  const enqueueInput = (text, sourceIdentity = 'participant') => {
-    generationChain = generationChain
-      .then(() => processUserInput(text, sourceIdentity))
-      .catch((err) => {
-        assistantState = 'idle';
-        console.error(`[agent][${roomName}] generation error:`, err);
-      });
-  };
-
-  const flushBufferedUserTurn = () => {
-    pendingUserTimer = null;
-    const text = pendingUserText.trim();
-    const identity = pendingUserIdentity || 'participant';
-    pendingUserText = '';
-    pendingUserIdentity = '';
-    if (!text) return;
-    enqueueInput(text, identity);
+  const drainInputQueue = async () => {
+    if (processingInputQueue) return;
+    processingInputQueue = true;
+    try {
+      while (inputQueue.length > 0) {
+        const next = inputQueue.shift();
+        await processUserInput(next.text, next.sourceIdentity, next.seq);
+      }
+    } finally {
+      processingInputQueue = false;
+    }
   };
 
   const queueUserTurn = (text, sourceIdentity = 'participant') => {
     const cleaned = String(text || '').trim();
     if (!cleaned) return;
 
-    if (sourceIdentity === 'engine_kickoff') {
-      enqueueInput(cleaned, sourceIdentity);
-      return;
-    }
+    latestInputSeq += 1;
+    inputQueue.push({
+      text: cleaned,
+      sourceIdentity: sourceIdentity || 'participant',
+      seq: latestInputSeq,
+    });
 
-    pendingUserText = pendingUserText ? `${pendingUserText} ${cleaned}` : cleaned;
-    pendingUserIdentity = sourceIdentity || pendingUserIdentity || 'participant';
-
-    if (ENABLE_BARGE_IN && assistantState === 'speaking') {
+    if (ENABLE_BARGE_IN && assistantState !== 'idle') {
       interruptRequested = true;
       if (audioPump) audioPump.clear();
     }
 
-    if (pendingUserTimer) clearTimeout(pendingUserTimer);
-    pendingUserTimer = setTimeout(flushBufferedUserTurn, USER_TURN_END_DELAY_MS);
+    queueWorker = queueWorker.then(drainInputQueue).catch((err) => {
+      assistantState = 'idle';
+      console.error(`[agent][${roomName}] generation error:`, err);
+    });
   };
 
   const startRemoteAudioTranscription = (track, participant) => {
@@ -664,11 +663,6 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
       clearTimeout(emptyRoomStopTimer);
       emptyRoomStopTimer = null;
     }
-    if (pendingUserTimer) {
-      clearTimeout(pendingUserTimer);
-      pendingUserTimer = null;
-    }
-
     if (rl) {
       rl.close();
       rl = null;
@@ -687,7 +681,7 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
     }
     activeInputStreams.clear();
 
-    await generationChain.catch(() => undefined);
+    await queueWorker.catch(() => undefined);
     await interviewEngine.finalize().catch((err) => {
       console.error(`[agent][${roomName}] engine finalize error:`, err);
     });

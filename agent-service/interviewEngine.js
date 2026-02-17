@@ -73,8 +73,10 @@ class InterviewEngine {
     this.transcript = [];
     this.lastControllerMeta = null;
     this.lastQuestion = '';
+    this.lastSpokenPrompt = '';
     this.finalized = false;
     this.awaitingIntroConsent = true;
+    this.introConsentAttempts = 0;
     this.pausedByCandidate = false;
     this.repeatClarificationCount = 0;
     this.consecutiveUnknownAnswers = 0;
@@ -174,7 +176,7 @@ class InterviewEngine {
       return { intent: 'skip' };
     }
     if (
-      /\b(i don'?t know|dont know|do not know|not sure|no idea|can'?t answer|cannot answer|i am not sure|not able to answer|unable to answer|can'?t recall|cannot recall|don'?t remember|do not remember|not comfortable answering)\b/.test(
+      /\b(i don'?t know|dont know|do not know|not sure|no idea|can'?t answer|cannot answer|i am not sure|not able to answer|unable to answer|can'?t recall|cannot recall|don'?t remember|do not remember|not comfortable answering|i'?m blanking|im blanking|not my area|not my best area|not familiar enough)\b/.test(
         t,
       )
     ) {
@@ -231,6 +233,7 @@ class InterviewEngine {
     };
     this.lastControllerMeta = controller;
     this.lastQuestion = question;
+    this.lastSpokenPrompt = question;
 
     this.transcript.push({
       role: 'assistant',
@@ -363,9 +366,18 @@ class InterviewEngine {
       });
 
       if (!this.isConsentAffirmed(answer)) {
-        const followup =
+        this.introConsentAttempts += 1;
+        let followup =
           'No problem. Before we continue, please confirm when you are comfortable to start, and I can also re-explain the format briefly.';
+        if (this.introConsentAttempts >= 2) {
+          followup = 'Quick check: should we start now? You can say yes to begin, or say pause if you want a moment.';
+        }
+        if (this.introConsentAttempts >= 3) {
+          followup = 'I may have missed your response. I will proceed now, and you can say pause or wrap up at any time.';
+          this.awaitingIntroConsent = false;
+        }
         this.lastQuestion = followup;
+        this.lastSpokenPrompt = followup;
         this.lastControllerMeta = {
           section: 'intro',
           question: followup,
@@ -387,10 +399,30 @@ class InterviewEngine {
           meta: this.lastControllerMeta,
         });
         await this.persistProgress();
+        if (!this.awaitingIntroConsent) {
+          const resumed = await this.buildMoveOnQuestion('intro_consent_audio_miss');
+          this.lastControllerMeta = resumed.controller;
+          this.lastQuestion = resumed.question;
+          this.lastSpokenPrompt = resumed.question;
+          this.state.asked_questions += 1;
+          applyDeterministicGates(this.state);
+          this.transcript.push({
+            role: 'assistant',
+            by: this.botName,
+            text: resumed.question,
+            ts: nowIso(),
+            section: this.state.section,
+            stage: 'controller',
+            meta: resumed.controller,
+          });
+          await this.persistProgress();
+          return `${followup} ${resumed.question}`.trim();
+        }
         return followup;
       }
 
       this.awaitingIntroConsent = false;
+      this.introConsentAttempts = 0;
       applyDeterministicGates(this.state);
       let controller = await this.runControllerWithGuards(
         'Kickoff question after consent. Start with a warm, low-pressure opener before deep technical probing.',
@@ -412,6 +444,7 @@ class InterviewEngine {
 
       this.lastControllerMeta = controller;
       this.lastQuestion = question;
+      this.lastSpokenPrompt = question;
       this.state.asked_questions += 1;
       applyDeterministicGates(this.state);
 
@@ -449,6 +482,7 @@ class InterviewEngine {
       const resumed = await this.buildMoveOnQuestion('resumed_after_pause');
       this.lastControllerMeta = resumed.controller;
       this.lastQuestion = resumed.question;
+      this.lastSpokenPrompt = resumed.question;
       this.state.asked_questions += 1;
       applyDeterministicGates(this.state);
       this.transcript.push({
@@ -508,6 +542,7 @@ class InterviewEngine {
         const moved = await this.buildMoveOnQuestion(candidateIntent.intent);
         this.lastControllerMeta = moved.controller;
         this.lastQuestion = moved.question;
+        this.lastSpokenPrompt = moved.question;
         this.state.asked_questions += 1;
         applyDeterministicGates(this.state);
         this.transcript.push({
@@ -540,7 +575,11 @@ class InterviewEngine {
     applyAnalyzerResult(this.state, analyzer);
     const leadIn = this.buildConversationalLeadIn(analyzer, candidateIntent);
 
-    let forcedFollowup = this.buildDeterministicFollowupFromAnalyzer(analyzer);
+    const deterministicFollowup = this.buildDeterministicFollowupFromAnalyzer(analyzer);
+    let forcedFollowup = '';
+    if (deterministicFollowup && candidateIntent.intent === 'none' && this.repeatClarificationCount < 1) {
+      forcedFollowup = deterministicFollowup;
+    }
     const sameAsLast =
       forcedFollowup &&
       this.normalizeText(sanitizeQuestionText(forcedFollowup)) === this.normalizeText(sanitizeQuestionText(this.lastQuestion));
@@ -586,7 +625,8 @@ class InterviewEngine {
     const spokenPrompt = `${leadIn} ${question}`.trim();
 
     this.lastControllerMeta = controller;
-    this.lastQuestion = spokenPrompt;
+    this.lastQuestion = question;
+    this.lastSpokenPrompt = spokenPrompt;
     this.state.asked_questions += 1;
     applyDeterministicGates(this.state);
 

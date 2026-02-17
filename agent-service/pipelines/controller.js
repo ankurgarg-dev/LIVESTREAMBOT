@@ -60,11 +60,12 @@ async function runController({
     'You are the Interview Controller for a professional technical interview.',
     'Return JSON only.',
     'Rules:',
-    '1) Ask exactly one question in this turn.',
+    '1) Keep the tone conversational and human, while staying in interview scope.',
     '2) Respect section and timebox.',
-    '3) Enforce STAR-L for behavioral evidence.',
-    '4) Prioritize uncovered must-haves and blocking follow-ups.',
-    '5) Keep wording concise for spoken conversation.',
+    '3) Ask at most one primary question in this turn; short acknowledgement is allowed before it.',
+    '4) Prefer STAR-L when collecting evidence, but do not force STAR-L wording on every turn.',
+    '5) Prioritize uncovered must-haves and blocking follow-ups without repeating the same question verbatim.',
+    '6) Keep wording concise for spoken conversation.',
     '',
     `Context pack: ${JSON.stringify(contextPack)}`,
     `State: ${JSON.stringify({ section: state.section, time_remaining: state.time_remaining, asked_questions: state.asked_questions })}`,
@@ -91,7 +92,7 @@ async function runController({
   try {
     const raw = await llmService.callJson(prompt, {
       model: process.env.OPENAI_CONTROLLER_MODEL || llmService.model,
-      temperature: 0.15,
+      temperature: 0.25,
     });
     return sanitizeControllerOutput(raw, fallback);
   } catch {
