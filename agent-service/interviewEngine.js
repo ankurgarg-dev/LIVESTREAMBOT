@@ -75,6 +75,9 @@ class InterviewEngine {
     this.lastQuestion = '';
     this.finalized = false;
     this.awaitingIntroConsent = true;
+    this.pausedByCandidate = false;
+    this.repeatClarificationCount = 0;
+    this.consecutiveUnknownAnswers = 0;
   }
 
   async init() {
@@ -131,6 +134,64 @@ class InterviewEngine {
     if (!t) return false;
     if (/\b(no|not now|don\'t|do not|stop|pause|later)\b/.test(t)) return false;
     return /\b(yes|yeah|yep|sure|ok|okay|sounds good|let\'s start|lets start|go ahead|proceed|ready)\b/.test(t);
+  }
+
+  normalizeText(value) {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  detectCandidateIntent(text) {
+    const t = this.normalizeText(text);
+    if (!t) return { intent: 'none' };
+
+    if (/\b(resume|continue|let'?s continue|go on|proceed|ready now|we can continue)\b/.test(t)) {
+      return { intent: 'resume' };
+    }
+    if (/\b(end interview|wrap up|wind up|finish interview|stop interview|no more questions|let'?s stop|can we end|can we finish|that is all from me)\b/.test(t)) {
+      return { intent: 'end' };
+    }
+    if (/\b(pause|hold on|hold|take a break|break|give me a moment|one moment|need a minute)\b/.test(t)) {
+      return { intent: 'pause' };
+    }
+    if (
+      /\b(skip|pass|move on|next question|switch topic|different question|let'?s move on|please move on|pls move on|can we move on|can we skip|skip this|pass this)\b/.test(
+        t,
+      )
+    ) {
+      return { intent: 'skip' };
+    }
+    if (
+      /\b(i don'?t know|dont know|do not know|not sure|no idea|can'?t answer|cannot answer|i am not sure|not able to answer|unable to answer|can'?t recall|cannot recall|don'?t remember|do not remember|not comfortable answering)\b/.test(
+        t,
+      )
+    ) {
+      return { intent: 'unknown' };
+    }
+    return { intent: 'none' };
+  }
+
+  async buildMoveOnQuestion(reasonHint = '') {
+    let controller = await this.runControllerWithGuards(
+      `Candidate could not answer previous question (${reasonHint || 'stuck'}). Move to a different topic and do not repeat the same question.`,
+    );
+    let question = sanitizeQuestionText(controller.question);
+    if (!question) {
+      const fallback = buildFallbackQuestion({
+        roleFamily: this.contextPack?.role_family,
+        section: this.state.section,
+        askedQuestions: this.state.asked_questions,
+        uncoveredMustHaves: computeCoverageStatus(this.state).uncovered,
+      });
+      question = sanitizeQuestionText(fallback.question);
+      controller = {
+        section: this.state.section,
+        ...fallback,
+      };
+    }
+    return { controller, question };
   }
 
   registerParticipant(identity) {
@@ -367,6 +428,96 @@ class InterviewEngine {
       answer_to: this.lastQuestion,
     });
 
+    const candidateIntent = this.detectCandidateIntent(answer);
+    if (this.pausedByCandidate) {
+      if (candidateIntent.intent !== 'resume') {
+        const pausedMsg = 'Interview is paused. Say "resume" when you are ready, or say "wrap up" to end early.';
+        await this.persistProgress();
+        return pausedMsg;
+      }
+      this.pausedByCandidate = false;
+      const resumed = await this.buildMoveOnQuestion('resumed_after_pause');
+      this.lastControllerMeta = resumed.controller;
+      this.lastQuestion = resumed.question;
+      this.state.asked_questions += 1;
+      applyDeterministicGates(this.state);
+      this.transcript.push({
+        role: 'assistant',
+        by: this.botName,
+        text: resumed.question,
+        ts: nowIso(),
+        section: this.state.section,
+        stage: 'controller',
+        meta: resumed.controller,
+      });
+      await this.persistProgress();
+      return resumed.question;
+    }
+
+    if (candidateIntent.intent === 'pause') {
+      this.pausedByCandidate = true;
+      const pauseMsg = 'Understood. We can pause here. Say "resume" when you are ready, or say "wrap up" to end early.';
+      await this.persistProgress();
+      return pauseMsg;
+    }
+
+    if (candidateIntent.intent === 'end') {
+      this.state.section = 'wrap_up';
+      const wrapUpMsg = 'Understood, we can wrap up now. Before we close, do you have any final question for me?';
+      this.lastControllerMeta = {
+        section: 'wrap_up',
+        question: wrapUpMsg,
+        question_intent: 'wrapup',
+        expected_answer_format: 'short_fact',
+        probes: [],
+        must_haves_targeted: [],
+        timebox_seconds: 45,
+        rationale: 'candidate_requested_wrapup',
+        end_interview: true,
+      };
+      this.lastQuestion = wrapUpMsg;
+      this.state.asked_questions += 1;
+      applyDeterministicGates(this.state);
+      this.transcript.push({
+        role: 'assistant',
+        by: this.botName,
+        text: wrapUpMsg,
+        ts: nowIso(),
+        section: this.state.section,
+        stage: 'controller',
+        meta: this.lastControllerMeta,
+      });
+      await this.persistProgress();
+      return wrapUpMsg;
+    }
+
+    if (candidateIntent.intent === 'skip' || candidateIntent.intent === 'unknown') {
+      this.consecutiveUnknownAnswers += 1;
+      const moveOnNow = candidateIntent.intent === 'skip' || this.consecutiveUnknownAnswers >= 2;
+      if (moveOnNow) {
+        const moved = await this.buildMoveOnQuestion(candidateIntent.intent);
+        this.lastControllerMeta = moved.controller;
+        this.lastQuestion = moved.question;
+        this.state.asked_questions += 1;
+        applyDeterministicGates(this.state);
+        this.transcript.push({
+          role: 'assistant',
+          by: this.botName,
+          text: moved.question,
+          ts: nowIso(),
+          section: this.state.section,
+          stage: 'controller',
+          meta: moved.controller,
+        });
+        this.consecutiveUnknownAnswers = 0;
+        this.repeatClarificationCount = 0;
+        await this.persistProgress();
+        return moved.question;
+      }
+    } else {
+      this.consecutiveUnknownAnswers = 0;
+    }
+
     const analyzer = await runAnalyzer({
       llmService: this.llmService,
       contextPack: this.contextPack,
@@ -378,8 +529,24 @@ class InterviewEngine {
 
     applyAnalyzerResult(this.state, analyzer);
 
-    const forcedFollowup = this.buildDeterministicFollowupFromAnalyzer(analyzer);
-    let controller = await this.runControllerWithGuards(forcedFollowup || '');
+    let forcedFollowup = this.buildDeterministicFollowupFromAnalyzer(analyzer);
+    const sameAsLast =
+      forcedFollowup &&
+      this.normalizeText(sanitizeQuestionText(forcedFollowup)) === this.normalizeText(sanitizeQuestionText(this.lastQuestion));
+    if (sameAsLast) {
+      this.repeatClarificationCount += 1;
+    } else {
+      this.repeatClarificationCount = 0;
+    }
+
+    if (sameAsLast && this.repeatClarificationCount >= 1) {
+      forcedFollowup = '';
+    }
+
+    let controller = await this.runControllerWithGuards(
+      forcedFollowup ||
+        (sameAsLast ? 'Candidate is stuck. Move on and ask a different question instead of repeating.' : ''),
+    );
 
     if (forcedFollowup) {
       controller.question = forcedFollowup;
