@@ -90,3 +90,25 @@ Frontend toggles:
 
 - `NEXT_PUBLIC_LK_RECORD_ENDPOINT=/api/record`
 - `NEXT_PUBLIC_AUTO_RECORD_INTERVIEW=true` to auto start/stop recording on room connect/disconnect
+
+## EC2 Lease Mode (Auto Stop)
+
+To avoid leaving EC2 running for long periods, use lease scripts in `ops/`:
+
+- `ops/ec2-lease-start.sh`: starts EC2, restores services, and arms auto-stop (default `120` minutes)
+- `ops/ec2-lease-stop.sh`: stops EC2 immediately
+- `ops/ec2-lease-status.sh`: shows instance + lease timer status
+
+Examples:
+
+```bash
+cd livekit-meet-local
+LEASE_MINUTES=120 ./ops/ec2-lease-start.sh
+./ops/ec2-lease-status.sh
+./ops/ec2-lease-stop.sh
+```
+
+Notes:
+
+- Scripts auto-read `/tmp/bristlecone_deploy_vars` when present.
+- Auto-stop is implemented on EC2 via a transient systemd timer (`bristlecone-auto-stop`).
