@@ -755,6 +755,9 @@ async function startManager() {
   const sessions = new Map();
   const pendingJoins = new Map();
   let shuttingDown = false;
+  const resetSessionOnJoin =
+    process.env.AGENT_RESET_SESSION_ON_JOIN === 'true' ||
+    process.env.AGENT_RESET_SESSION_ON_JOIN === '1';
 
   const ensureSession = async (roomName, { interactiveStdin = false, reason = 'api' } = {}) => {
     const normalized = normalizeRoomName(roomName);
@@ -762,13 +765,28 @@ async function startManager() {
       throw new Error('roomName is required');
     }
 
+    const shouldResetExisting =
+      resetSessionOnJoin && (reason === 'control-api' || reason === 'startup-default-room');
+
     if (sessions.has(normalized)) {
-      return { roomName: normalized, status: 'already_joined' };
+      if (!shouldResetExisting) {
+        return { roomName: normalized, status: 'already_joined' };
+      }
+
+      const existing = sessions.get(normalized);
+      sessions.delete(normalized);
+      if (existing && typeof existing.stop === 'function') {
+        await existing.stop('reset_on_join').catch((err) => {
+          console.error(`[agent-manager] failed to reset room '${normalized}':`, err);
+        });
+      }
     }
 
     if (pendingJoins.has(normalized)) {
       await pendingJoins.get(normalized);
-      return { roomName: normalized, status: sessions.has(normalized) ? 'already_joined' : 'joined' };
+      if (sessions.has(normalized) && !shouldResetExisting) {
+        return { roomName: normalized, status: 'already_joined' };
+      }
     }
 
     console.log(`[agent-manager] joining room '${normalized}' (reason: ${reason})`);
