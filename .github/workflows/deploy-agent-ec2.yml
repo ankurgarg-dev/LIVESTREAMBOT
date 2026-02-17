@@ -1,0 +1,74 @@
+name: Deploy Agent To EC2
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'agent-service/**'
+      - '.github/workflows/deploy-agent-ec2.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-agent-ec2-main
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  DEPLOY_BUCKET: ${{ secrets.DEPLOY_BUCKET }}
+  EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
+
+jobs:
+  deploy-agent:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Upload agent artifacts to S3
+        run: |
+          set -euo pipefail
+          aws s3 sync agent-service "s3://${DEPLOY_BUCKET}/agent-update/agent-service" --delete --exclude ".env" --exclude "node_modules/*"
+          printf '%s\n' "${GITHUB_SHA}" | aws s3 cp - "s3://${DEPLOY_BUCKET}/agent-update/DEPLOYED_GIT_SHA"
+
+      - name: Trigger EC2 agent deploy via SSM
+        id: ssm
+        run: |
+          set -euo pipefail
+          PARAMS=$(jq -nc --arg b "${DEPLOY_BUCKET}" '[
+            "set -e",
+            "cd /opt/bristlecone-app",
+            ("aws s3 sync s3://" + $b + "/agent-update/agent-service ./agent-service --delete --exact-timestamps --exclude \".env\" --exclude \"node_modules/*\""),
+            "npm --prefix /opt/bristlecone-app/agent-service install --omit=dev",
+            "sudo systemctl restart bristlecone-agent.service",
+            "sudo systemctl is-active bristlecone-agent.service",
+            "node --check /opt/bristlecone-app/agent-service/livekitAgent.js"
+          ]')
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "${EC2_INSTANCE_ID}" \
+            --document-name "AWS-RunShellScript" \
+            --query "Command.CommandId" \
+            --output text \
+            --parameters "commands=${PARAMS}")
+          echo "command_id=${COMMAND_ID}" >> "$GITHUB_OUTPUT"
+          aws ssm wait command-executed --command-id "${COMMAND_ID}" --instance-id "${EC2_INSTANCE_ID}"
+
+      - name: Print SSM output
+        if: always()
+        run: |
+          aws ssm get-command-invocation \
+            --command-id "${{ steps.ssm.outputs.command_id }}" \
+            --instance-id "${EC2_INSTANCE_ID}" \
+            --query '{Status:Status,StdOut:StandardOutputContent,StdErr:StandardErrorContent}' \
+            --output json
