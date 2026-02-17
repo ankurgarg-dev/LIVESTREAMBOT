@@ -143,6 +143,16 @@ class InterviewEngine {
       .trim();
   }
 
+  buildConversationalLeadIn(analyzerResult, candidateIntent) {
+    const intent = String(candidateIntent?.intent || 'none');
+    if (intent === 'skip') return 'No problem, we can move on.';
+    if (intent === 'unknown') return 'Thanks for being candid.';
+    const quality = String(analyzerResult?.answer_quality || '').toLowerCase();
+    if (quality === 'strong') return 'Thanks, that was helpful context.';
+    if (quality === 'partial') return 'Thanks, I am following you.';
+    return 'Thanks for sharing.';
+  }
+
   detectCandidateIntent(text) {
     const t = this.normalizeText(text);
     if (!t) return { intent: 'none' };
@@ -528,6 +538,7 @@ class InterviewEngine {
     });
 
     applyAnalyzerResult(this.state, analyzer);
+    const leadIn = this.buildConversationalLeadIn(analyzer, candidateIntent);
 
     let forcedFollowup = this.buildDeterministicFollowupFromAnalyzer(analyzer);
     const sameAsLast =
@@ -572,9 +583,10 @@ class InterviewEngine {
         ...fallback,
       };
     }
+    const spokenPrompt = `${leadIn} ${question}`.trim();
 
     this.lastControllerMeta = controller;
-    this.lastQuestion = question;
+    this.lastQuestion = spokenPrompt;
     this.state.asked_questions += 1;
     applyDeterministicGates(this.state);
 
@@ -585,7 +597,7 @@ class InterviewEngine {
     this.transcript.push({
       role: 'assistant',
       by: this.botName,
-      text: question,
+      text: spokenPrompt,
       ts: nowIso(),
       section: this.state.section,
       stage: 'controller',
@@ -593,7 +605,7 @@ class InterviewEngine {
     });
 
     await this.persistProgress();
-    return question;
+    return spokenPrompt;
   }
 
   buildFallbackFinal() {

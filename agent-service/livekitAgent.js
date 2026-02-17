@@ -37,7 +37,7 @@ const STT_CHANNELS = 1;
 const BOT_IDENTITY_BASE = (process.env.BOT_IDENTITY || 'bristlecone-ai-agent').trim();
 const BOT_NAME = (process.env.BOT_NAME || 'Bristlecone AI Agent').trim();
 const ROOM_IDLE_TIMEOUT_MS = Math.max(30000, Number(process.env.AGENT_ROOM_IDLE_TIMEOUT_MS || 180000));
-const USER_TURN_END_DELAY_MS = Math.max(500, Number(process.env.USER_TURN_END_DELAY_MS || 1300));
+const USER_TURN_END_DELAY_MS = Math.max(500, Number(process.env.USER_TURN_END_DELAY_MS || 2200));
 const ENABLE_BARGE_IN = process.env.ENABLE_BARGE_IN !== 'false';
 const EMPTY_ROOM_FINALIZE_DELAY_MS = Math.max(
   1000,
@@ -221,9 +221,9 @@ class SpeechTurnDetector {
     participantIdentity,
     rmsThreshold = Number(process.env.STT_VAD_RMS_THRESHOLD || 0.004),
     minSpeechMs = Number(process.env.STT_MIN_SPEECH_MS || 220),
-    maxSilenceMs = Number(process.env.STT_MAX_SILENCE_MS || 900),
-    maxUtteranceMs = Number(process.env.STT_MAX_UTTERANCE_MS || 12000),
-    minTranscribeMs = Number(process.env.STT_MIN_TRANSCRIBE_MS || 300),
+    maxSilenceMs = Number(process.env.STT_MAX_SILENCE_MS || 1500),
+    maxUtteranceMs = Number(process.env.STT_MAX_UTTERANCE_MS || 20000),
+    minTranscribeMs = Number(process.env.STT_MIN_TRANSCRIBE_MS || 650),
   }) {
     this.transcriptionService = transcriptionService;
     this.onTranscription = onTranscription;
