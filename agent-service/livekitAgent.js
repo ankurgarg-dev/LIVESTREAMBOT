@@ -18,7 +18,6 @@ const {
 
 const { LLMService } = require('./llmService');
 const { TTSService } = require('./ttsService');
-const { InterviewEngine } = require('./interviewEngine');
 
 const REQUIRED_ENV = ['OPENAI_API_KEY', 'LIVEKIT_URL', 'LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET'];
 for (const key of REQUIRED_ENV) {
@@ -362,8 +361,6 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
   let stopped = false;
   let idleTimer = null;
   let emptyRoomStopTimer = null;
-  let kickoffSent = false;
-  const participantSet = new Set();
 
   room.on(RoomEvent.ParticipantConnected, (participant) => {
     console.log(`[room:${roomName}] participant connected: ${participant.identity}`);
@@ -374,23 +371,6 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
     if (emptyRoomStopTimer) {
       clearTimeout(emptyRoomStopTimer);
       emptyRoomStopTimer = null;
-    }
-    if (!isBotIdentity(participant.identity)) {
-      participantSet.add(participant.identity);
-      interviewEngine
-        .persist({
-          participantsJoined: Array.from(participantSet).join(', '),
-        })
-        .catch((err) => console.error(`[agent][${roomName}] persist participants error:`, err));
-      if (!kickoffSent) {
-        kickoffSent = true;
-        interviewEngine
-          .getKickoffQuestion()
-          .then((question) => queueUserTurn(question, 'engine_kickoff'))
-          .catch((err) => {
-            console.error(`[agent][${roomName}] kickoff generation error:`, err);
-          });
-      }
     }
   });
 
@@ -433,14 +413,10 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
     model: process.env.OPENAI_STT_MODEL || 'gpt-4o-mini-transcribe',
     language: process.env.OPENAI_STT_LANGUAGE || undefined,
   });
-
-  const interviewEngine = new InterviewEngine({
-    roomName,
-    botName: BOT_NAME,
-    llmService,
-  });
-  await interviewEngine.init();
-  llmService.systemPrompt = interviewEngine.getControllerSystemPrompt();
+  const runtimeInstruction = String(
+    process.env.OPENAI_RUNTIME_INSTRUCTION ||
+      'Have a natural spoken conversation. Keep responses brief, clear, and friendly.',
+  );
 
   const activeInputStreams = new Map();
   let assistantState = 'idle'; // idle | thinking | speaking
@@ -476,34 +452,37 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
     const trimmed = text.trim();
     if (!trimmed) return;
 
-    let assistantReply = '';
-    if (sourceIdentity === 'engine_kickoff') {
-      assistantReply = trimmed;
-    } else {
-      assistantReply = await interviewEngine.handleCandidateTurn(trimmed, sourceIdentity);
-    }
-    if (!assistantReply || !assistantReply.trim()) return;
-
     console.log(`\n[user][${roomName}] ${trimmed}`);
     assistantState = 'thinking';
     interruptRequested = false;
-    process.stdout.write(`[assistant][${roomName}] ${assistantReply}\n`);
+    process.stdout.write(`[assistant][${roomName}] `);
 
     if (seq > 0 && seq < latestInputSeq) {
       assistantState = 'idle';
       return;
     }
 
+    const llmDeltaStream = llmService.streamAssistantReply(trimmed, {
+      runtimeInstruction,
+    });
+    const guardedLlmDeltaStream = (async function* guarded() {
+      for await (const delta of llmDeltaStream) {
+        if (interruptRequested || (seq > 0 && seq < latestInputSeq)) break;
+        process.stdout.write(delta);
+        yield delta;
+      }
+      process.stdout.write('\n');
+    })();
+
     assistantState = 'speaking';
     while (!audioPump) {
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
-    for await (const pcmChunk of ttsService.streamPcm48kForText(assistantReply)) {
+    for await (const pcmChunk of ttsService.streamFromLlmText(guardedLlmDeltaStream)) {
       if (interruptRequested || (seq > 0 && seq < latestInputSeq)) break;
       await audioPump.writePcm16le(pcmChunk);
     }
     assistantState = 'idle';
-    await interviewEngine.persistProgress();
   };
 
   const drainInputQueue = async () => {
@@ -682,9 +661,6 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
     activeInputStreams.clear();
 
     await queueWorker.catch(() => undefined);
-    await interviewEngine.finalize().catch((err) => {
-      console.error(`[agent][${roomName}] engine finalize error:`, err);
-    });
     if (audioPump) {
       await audioPump.stop();
     }
