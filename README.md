@@ -95,15 +95,17 @@ Frontend toggles:
 
 To avoid leaving EC2 running for long periods, use lease scripts in `ops/`:
 
-- `ops/ec2-lease-start.sh`: starts EC2, restores services, and arms auto-stop (default `120` minutes)
+- `ops/ec2-lease-start.sh`: starts EC2, restores services, and arms auto-stop (default `240` minutes)
+- `ops/ec2-lease-extend.sh`: extends the current auto-stop timer without restarting services (default `240` minutes)
 - `ops/ec2-lease-stop.sh`: stops EC2 immediately
-- `ops/ec2-lease-status.sh`: shows instance + lease timer status
+- `ops/ec2-lease-status.sh`: shows instance status, suggested URL, service state, and lease timer
 
 Examples:
 
 ```bash
 cd livekit-meet-local
-LEASE_MINUTES=120 ./ops/ec2-lease-start.sh
+LEASE_MINUTES=240 ./ops/ec2-lease-start.sh
+LEASE_MINUTES=240 ./ops/ec2-lease-extend.sh
 ./ops/ec2-lease-status.sh
 ./ops/ec2-lease-stop.sh
 ```

@@ -15,14 +15,25 @@ if [[ -z "${INSTANCE_ID}" ]]; then
   exit 1
 fi
 
-STATE="$(aws ec2 describe-instances \
+STATE_NAME="$(aws ec2 describe-instances \
   --instance-ids "${INSTANCE_ID}" \
   --query 'Reservations[0].Instances[0].State.Name' \
   --output text)"
+PUBLIC_IP="$(aws ec2 describe-instances \
+  --instance-ids "${INSTANCE_ID}" \
+  --query 'Reservations[0].Instances[0].PublicIpAddress' \
+  --output text)"
+if [[ "${PUBLIC_IP}" == "None" ]]; then
+  PUBLIC_IP=""
+fi
 
-echo "Instance ${INSTANCE_ID}: ${STATE}"
+echo "Instance ${INSTANCE_ID}: ${STATE_NAME}"
+if [[ -n "${PUBLIC_IP}" ]]; then
+  HOST="lk.${PUBLIC_IP//./-}.sslip.io"
+  echo "Suggested URL: http://${HOST}/?tab=dashboard"
+fi
 
-if [[ "${STATE}" != "running" ]]; then
+if [[ "${STATE_NAME}" != "running" ]]; then
   exit 0
 fi
 
@@ -33,6 +44,11 @@ COMMAND_ID="$(aws ssm send-command \
   --output text \
   --parameters "commands=[
     \"set -e\",
+    \"echo === services ===\",
+    \"sudo systemctl is-active livekit-server || true\",
+    \"sudo systemctl is-active caddy || true\",
+    \"sudo systemctl is-active bristlecone-app.service || true\",
+    \"sudo systemctl is-active bristlecone-agent.service || true\",
     \"echo === timer ===\",
     \"sudo systemctl status bristlecone-auto-stop.timer --no-pager || true\",
     \"echo === service ===\",
