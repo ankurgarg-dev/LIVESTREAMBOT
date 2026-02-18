@@ -223,28 +223,61 @@ export default function Page() {
     [interviews],
   );
 
+  const fetchJsonWithTimeout = async (url: string, timeoutMs = 8000) => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      const json = await response.json().catch(() => ({}));
+      return { response, json };
+    } finally {
+      window.clearTimeout(timer);
+    }
+  };
+
   const loadData = async () => {
     setLoading(true);
     setError('');
     try {
-      const [interviewRes, positionRes] = await Promise.all([
-        fetch('/api/interviews', { cache: 'no-store' }),
-        fetch('/api/positions', { cache: 'no-store' }),
+      const [interviewResult, positionResult] = await Promise.allSettled([
+        fetchJsonWithTimeout('/api/interviews'),
+        fetchJsonWithTimeout('/api/positions'),
       ]);
-      const interviewJson = await interviewRes.json();
-      const positionJson = await positionRes.json();
 
-      if (!interviewRes.ok) {
-        throw new Error(interviewJson.error || 'Failed to load interviews');
-      }
-      if (!positionRes.ok || !positionJson.ok) {
-        throw new Error(positionJson.error || 'Failed to load positions');
+      let nextInterviews: InterviewRecord[] = [];
+      let nextPositions: PositionRecord[] = [];
+      const errors: string[] = [];
+
+      if (interviewResult.status === 'fulfilled') {
+        const { response, json } = interviewResult.value;
+        if (response.ok) {
+          nextInterviews = Array.isArray(json?.interviews) ? json.interviews : [];
+        } else {
+          errors.push(json?.error || 'Failed to load interviews');
+        }
+      } else {
+        errors.push('Interviews request timed out or failed');
       }
 
-      const nextInterviews = interviewJson.interviews ?? [];
-      const nextPositions = positionJson.positions ?? [];
+      if (positionResult.status === 'fulfilled') {
+        const { response, json } = positionResult.value;
+        if (response.ok && json?.ok !== false) {
+          nextPositions = Array.isArray(json?.positions) ? json.positions : [];
+        } else {
+          errors.push(json?.error || 'Failed to load positions');
+        }
+      } else {
+        errors.push('Positions request timed out or failed');
+      }
+
       setInterviews(nextInterviews);
       setPositions(nextPositions);
+      if (errors.length > 0) {
+        setError(errors.join(' | '));
+      }
 
       if (!selectedPositionId && nextPositions.length > 0) {
         const first = nextPositions[0];
