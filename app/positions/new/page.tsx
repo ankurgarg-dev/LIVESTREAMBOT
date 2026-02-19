@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { useRouter } from 'next/navigation';
 import {
   ARCHETYPES,
   DEEP_DIVE_MODES,
@@ -37,6 +38,8 @@ type PositionRecord = PositionConfigCore & {
   updated_at: string;
   version: number;
 };
+
+const SUPPORTED_JD_FILE_PATTERN = /\.(txt|md|json|csv|doc|docx)$/i;
 
 function emptyConfig(): PositionConfigCore {
   return {
@@ -106,6 +109,7 @@ function TagInput(props: {
 }
 
 export default function NewPositionPage() {
+  const router = useRouter();
   const [step, setStep] = React.useState<1 | 2 | 3>(1);
   const [loading, setLoading] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
@@ -255,9 +259,31 @@ export default function NewPositionPage() {
     setSuccess('');
   };
 
+  const onJdFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] || null;
+    if (!file) {
+      setJdFile(null);
+      return;
+    }
+    const textLike = file.type.startsWith('text/') || SUPPORTED_JD_FILE_PATTERN.test(file.name);
+    if (!textLike) {
+      setJdFile(null);
+      setError(`Unsupported JD file type: ${file.name}. Use .txt/.md/.json/.csv/.doc/.docx, or paste JD text.`);
+      event.target.value = '';
+      return;
+    }
+    setError('');
+    setJdFile(file);
+  };
+
   return (
     <main className={styles.main} data-lk-theme="default">
-      <h2 style={{ margin: 0 }}>New Position</h2>
+      <div className={styles.row}>
+        <h2 style={{ margin: 0 }}>New Position</h2>
+        <button type="button" className="lk-button" onClick={() => router.push('/?tab=dashboard')}>
+          Back to Home
+        </button>
+      </div>
       <p className={styles.subtle}>Step {step} of 3: JD ingest, review/edit, save configuration.</p>
 
       <section className={styles.panel}>
@@ -272,7 +298,13 @@ export default function NewPositionPage() {
           onChange={(e) => setJdText(e.target.value)}
           placeholder="Paste JD text here"
         />
-        <input type="file" accept=".txt,.md,.json,.csv,.pdf,.doc,.docx" onChange={(e) => setJdFile(e.target.files?.[0] || null)} />
+        <input
+          type="file"
+          accept=".txt,.md,.json,.csv,.doc,.docx,text/plain,text/markdown,application/json,text/csv,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          onChange={onJdFileChange}
+        />
+        {jdFile ? <p className={styles.subtle}>{`Selected file: ${jdFile.name}`}</p> : null}
+        <p className={styles.subtle}>Supported upload formats: .txt, .md, .json, .csv, .doc, .docx (or paste JD text).</p>
         <div className={styles.row}>
           <button type="button" className="lk-button" onClick={runPrefill} disabled={loading}>
             {loading ? 'Prefilling...' : 'Prefill from JD'}

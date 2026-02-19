@@ -3,6 +3,7 @@ set -euo pipefail
 
 # Starts EC2, restores app/agent services, and arms an auto-stop timer.
 # Defaults to a 240-minute lease.
+# Fast path: wait for "running" + SSM Online (faster than full status checks).
 
 if [[ -f /tmp/bristlecone_deploy_vars ]]; then
   # shellcheck disable=SC1091
@@ -11,6 +12,7 @@ fi
 
 INSTANCE_ID="${INSTANCE_ID:-${EC2_INSTANCE_ID:-}}"
 LEASE_MINUTES="${LEASE_MINUTES:-240}"
+STRICT_HEALTH_CHECK="${STRICT_HEALTH_CHECK:-0}"
 
 if [[ -z "${INSTANCE_ID}" ]]; then
   echo "INSTANCE_ID (or EC2_INSTANCE_ID) is required."
@@ -35,22 +37,38 @@ retry() {
   done
 }
 
-echo "Starting instance: ${INSTANCE_ID}"
-aws ec2 modify-instance-attribute \
-  --instance-id "${INSTANCE_ID}" \
-  --instance-initiated-shutdown-behavior Value=stop >/dev/null
-aws ec2 start-instances --instance-ids "${INSTANCE_ID}" >/dev/null
-aws ec2 wait instance-status-ok --instance-ids "${INSTANCE_ID}"
-echo "Instance is healthy. Waiting for SSM registration..."
+INSTANCE_STATE="$(aws ec2 describe-instances \
+  --instance-ids "${INSTANCE_ID}" \
+  --query "Reservations[0].Instances[0].State.Name" \
+  --output text)"
 
-for _ in {1..30}; do
+if [[ "${INSTANCE_STATE}" == "running" ]]; then
+  echo "Instance ${INSTANCE_ID} is already running."
+else
+  echo "Starting instance: ${INSTANCE_ID}"
+  aws ec2 modify-instance-attribute \
+    --instance-id "${INSTANCE_ID}" \
+    --instance-initiated-shutdown-behavior Value=stop >/dev/null
+  aws ec2 start-instances --instance-ids "${INSTANCE_ID}" >/dev/null
+  aws ec2 wait instance-running --instance-ids "${INSTANCE_ID}"
+  if [[ "${STRICT_HEALTH_CHECK}" == "1" ]]; then
+    aws ec2 wait instance-status-ok --instance-ids "${INSTANCE_ID}"
+    echo "Instance passed status checks."
+  else
+    echo "Instance is running (fast mode)."
+  fi
+fi
+
+echo "Waiting for SSM registration..."
+
+for _ in {1..24}; do
   if aws ssm describe-instance-information \
     --filters "Key=InstanceIds,Values=${INSTANCE_ID}" \
     --query "InstanceInformationList[0].PingStatus" \
     --output text 2>/dev/null | grep -q "Online"; then
     break
   fi
-  sleep 5
+  sleep 3
 done
 
 SSM_PING="$(aws ssm describe-instance-information \
@@ -72,8 +90,8 @@ COMMAND_ID="$(retry 4 aws ssm send-command \
   --parameters "commands=[
     \"set -e\",
     \"cd /opt/bristlecone-app\",
-    \"sudo systemctl restart livekit-server || true\",
-    \"sudo systemctl restart caddy || true\",
+    \"sudo systemctl is-active livekit-server >/dev/null || sudo systemctl restart livekit-server || true\",
+    \"sudo systemctl is-active caddy >/dev/null || sudo systemctl restart caddy || true\",
     \"sudo systemctl restart bristlecone-app.service\",
     \"sudo systemctl restart bristlecone-agent.service\",
     \"sudo systemctl is-active livekit-server || true\",

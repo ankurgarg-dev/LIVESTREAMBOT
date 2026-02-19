@@ -417,6 +417,7 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
   let emptyRoomStopTimer = null;
   let kickoffSent = false;
   let interviewStarted = false;
+  let candidateEverJoined = false;
   let interviewStartedAt = '';
   let finalReportPublished = false;
   let interviewId = '';
@@ -437,6 +438,7 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
       queueUserTurn('__bootstrap_interview_start__', 'agent_bootstrap');
     }
     if (!isBotIdentity(participant.identity)) {
+      candidateEverJoined = true;
       ensureInterviewStarted().catch(() => undefined);
     }
   });
@@ -630,7 +632,11 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
   };
 
   const publishFinalReport = async (stopReason) => {
-    if (finalReportPublished || !interviewStarted) return;
+    if (finalReportPublished || !candidateEverJoined) return;
+    if (!interviewStarted) {
+      await ensureInterviewStarted().catch(() => undefined);
+    }
+    if (!interviewStarted) return;
     finalReportPublished = true;
     const assessment = await evaluateInterview(stopReason);
     const update = {

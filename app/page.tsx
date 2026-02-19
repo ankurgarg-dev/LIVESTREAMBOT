@@ -608,6 +608,9 @@ export default function Page() {
           {!loading && activeTab === 'positions' ? (
             <div className={styles.tabContent}>
               <div className={styles.cardButtons}>
+                <button type="button" className="lk-button" onClick={() => switchTab('dashboard')}>
+                  Back to Home
+                </button>
                 <button type="button" className="lk-button" onClick={() => router.push('/positions/new')}>
                   New Position Setup
                 </button>
