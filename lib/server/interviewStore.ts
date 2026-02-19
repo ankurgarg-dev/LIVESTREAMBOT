@@ -5,6 +5,35 @@ import path from 'path';
 export type InterviewStatus = 'scheduled' | 'completed' | 'cancelled';
 export type Recommendation = 'strong_hire' | 'hire' | 'hold' | 'no_hire' | '';
 export type InterviewAgentType = 'classic' | 'realtime_screening';
+export type AssessmentDecision = 'strong_hire' | 'hire' | 'lean_hire' | 'lean_no' | 'no_hire';
+export type AssessmentConfidence = 'high' | 'medium' | 'low';
+export type OverallSignal = 'strong' | 'moderate' | 'weak';
+
+export type CompetencyAssessment = {
+  name: string;
+  score: number;
+  evidence: string;
+  strengths: string[];
+  concerns: string[];
+};
+
+export type EnhancedAssessmentReport = {
+  executiveSummary: string;
+  overallSignal: OverallSignal;
+  recommendationDecision: AssessmentDecision;
+  confidence: AssessmentConfidence;
+  rationale: string[];
+  interviewScore: number;
+  rubricScore: number;
+  scoreImplication: string;
+  calibrationNote: string;
+  competencies: CompetencyAssessment[];
+  strengths: string[];
+  risks: string[];
+  followUpQuestions: string[];
+  nextSteps: string[];
+  evidenceLimitations?: string;
+};
 
 export type InterviewAssetMeta = {
   originalName: string;
@@ -60,6 +89,7 @@ export type InterviewRecord = {
   detailedFeedback?: string;
   nextSteps?: string;
   transcriptText?: string;
+  assessmentReport?: EnhancedAssessmentReport;
   createdAt: string;
   updatedAt: string;
 };
@@ -97,6 +127,7 @@ export type InterviewUpdateInput = Partial<
     | 'nextSteps'
     | 'agentType'
     | 'transcriptText'
+    | 'assessmentReport'
   >
 >;
 

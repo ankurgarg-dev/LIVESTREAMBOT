@@ -227,11 +227,12 @@ class SpeechTurnDetector {
     transcriptionService,
     onTranscription,
     participantIdentity,
-    rmsThreshold = Number(process.env.STT_VAD_RMS_THRESHOLD || 0.004),
-    minSpeechMs = Number(process.env.STT_MIN_SPEECH_MS || 220),
-    maxSilenceMs = Number(process.env.STT_MAX_SILENCE_MS || 1500),
-    maxUtteranceMs = Number(process.env.STT_MAX_UTTERANCE_MS || 20000),
-    minTranscribeMs = Number(process.env.STT_MIN_TRANSCRIBE_MS || 650),
+    rmsThreshold = Number(process.env.STT_VAD_RMS_THRESHOLD || 0.005),
+    minSpeechMs = Number(process.env.STT_MIN_SPEECH_MS || 350),
+    maxSilenceMs = Number(process.env.STT_MAX_SILENCE_MS || 2200),
+    maxUtteranceMs = Number(process.env.STT_MAX_UTTERANCE_MS || 30000),
+    minTranscribeMs = Number(process.env.STT_MIN_TRANSCRIBE_MS || 1000),
+    graceMs = Number(process.env.STT_GRACE_MS || 350),
   }) {
     this.transcriptionService = transcriptionService;
     this.onTranscription = onTranscription;
@@ -240,6 +241,7 @@ class SpeechTurnDetector {
     this.rmsThreshold = rmsThreshold;
     this.minSpeechFrames = Math.max(1, Math.round(minSpeechMs / 20));
     this.maxSilenceFrames = Math.max(1, Math.round(maxSilenceMs / 20));
+    this.graceFrames = Math.max(0, Math.round(graceMs / 20));
     this.maxUtteranceFrames = Math.max(1, Math.round(maxUtteranceMs / 20));
     this.minTranscribeSamples = Math.max(1, Math.floor((minTranscribeMs / 1000) * STT_SAMPLE_RATE));
 
@@ -275,7 +277,7 @@ class SpeechTurnDetector {
     this.silenceFrames += 1;
     this.utteranceFrames.push(new Int16Array(data));
 
-    if (this.silenceFrames >= this.maxSilenceFrames) {
+    if (this.silenceFrames >= this.maxSilenceFrames + this.graceFrames) {
       if (this.speechFrames >= this.minSpeechFrames) {
         await this.flush('silence');
       } else {
@@ -390,6 +392,50 @@ function getAppBaseUrls() {
 function normalizeRecommendation(value) {
   const allowed = new Set(['strong_hire', 'hire', 'hold', 'no_hire']);
   return allowed.has(String(value || '').trim()) ? String(value).trim() : 'hold';
+}
+
+function normalizeDecision(value) {
+  const allowed = new Set(['strong_hire', 'hire', 'lean_hire', 'lean_no', 'no_hire']);
+  const normalized = String(value || '').trim().toLowerCase().replace(/\s+/g, '_');
+  return allowed.has(normalized) ? normalized : 'lean_no';
+}
+
+function decisionToLegacyRecommendation(decision) {
+  switch (normalizeDecision(decision)) {
+    case 'strong_hire':
+      return 'strong_hire';
+    case 'hire':
+    case 'lean_hire':
+      return 'hire';
+    case 'no_hire':
+      return 'no_hire';
+    case 'lean_no':
+    default:
+      return 'hold';
+  }
+}
+
+function normalizeConfidenceLabel(value) {
+  const allowed = new Set(['high', 'medium', 'low']);
+  const normalized = String(value || '').trim().toLowerCase();
+  return allowed.has(normalized) ? normalized : 'medium';
+}
+
+function normalizeSignal(value) {
+  const allowed = new Set(['strong', 'moderate', 'weak']);
+  const normalized = String(value || '').trim().toLowerCase();
+  return allowed.has(normalized) ? normalized : 'moderate';
+}
+
+function clampInt(value, min, max) {
+  const n = Number(value);
+  if (Number.isNaN(n)) return min;
+  return Math.max(min, Math.min(max, Math.round(n)));
+}
+
+function scoreToFive(score100) {
+  const normalized = Number(score100) / 20;
+  return Math.max(1, Math.min(5, Math.round(normalized || 0)));
 }
 
 function nowIso() {
@@ -702,14 +748,65 @@ async function createAgentSession(
 
   const buildFallbackAssessment = (stopReason) => {
     const turnCount = transcript.filter((t) => t.role === 'candidate').length;
+    const interviewScore = turnCount >= 8 ? 68 : turnCount >= 4 ? 58 : 48;
+    const rubricScore = turnCount >= 8 ? 6.8 : turnCount >= 4 ? 5.8 : 4.8;
+    const competencyTemplate = [
+      'Problem Solving & Reasoning',
+      'Technical Depth (role-specific)',
+      'Solution Design / Architecture',
+      'Communication & Clarity',
+      'Quality & Reliability',
+    ].map((name) => ({
+      name,
+      score: scoreToFive(interviewScore),
+      evidence: 'Evidence: Not available (no transcript).',
+      strengths: ['Interview was completed with enough interaction to infer baseline signal.'],
+      concerns: ['Competency evidence is limited; requires targeted follow-up validation.'],
+    }));
     return {
       summaryFeedback: `Interview ended (${stopReason}) after ${turnCount} candidate turns. Report generated from available conversation.`,
       detailedFeedback:
         'Strengths: communication observed in conversation. Risks: limited structured evidence due to partial/non-deterministic interview flow.',
       recommendation: 'hold',
-      interviewScore: turnCount >= 8 ? 68 : turnCount >= 4 ? 58 : 48,
-      rubricScore: turnCount >= 8 ? 6.8 : turnCount >= 4 ? 5.8 : 4.8,
+      interviewScore,
+      rubricScore,
       nextSteps: 'Schedule targeted follow-up focusing on depth, architecture tradeoffs, and measurable impact examples.',
+      report: {
+        executiveSummary:
+          'Candidate provided partial evidence across technical areas, but available signals are insufficient for a high-confidence decision without targeted follow-up.',
+        overallSignal: turnCount >= 8 ? 'moderate' : 'weak',
+        recommendationDecision: turnCount >= 8 ? 'lean_hire' : 'lean_no',
+        confidence: 'low',
+        rationale: [
+          'Interview completed with limited structured evidence.',
+          'Depth of production troubleshooting and architecture tradeoffs remains unclear.',
+          'Decision should be confirmed with a focused technical follow-up.',
+        ],
+        interviewScore,
+        rubricScore,
+        scoreImplication:
+          'Score suggests partial alignment with role expectations, but not enough depth for a high-confidence hire decision.',
+        calibrationNote: 'relative to expected level for Role (level unspecified).',
+        competencies: competencyTemplate,
+        strengths: [
+          'Maintained conversation and provided role-relevant responses.',
+          'Showed baseline communication and technical familiarity.',
+        ],
+        risks: [
+          'Troubleshooting depth unclear.',
+          'Production reliability and edge-case handling not fully evidenced.',
+        ],
+        followUpQuestions: [
+          'Describe a production issue you debugged end-to-end and how you isolated root cause.',
+          'Explain one architecture tradeoff you made and why.',
+          'How do you validate reliability before deployment?',
+        ],
+        nextSteps: [
+          'Run a focused technical follow-up round on debugging depth and architecture decisions.',
+          'Add a practical exercise aligned to the role.',
+        ],
+        evidenceLimitations: 'Transcript evidence was limited or unavailable.',
+      },
     };
   };
 
@@ -728,19 +825,43 @@ async function createAgentSession(
     }
 
     const prompt = [
-      'Generate a concise interview assessment report as strict JSON only.',
-      'The interview may be incomplete. Use only available evidence and mention uncertainty if needed.',
+      'Generate a structured interview assessment report for technical hiring as strict JSON only.',
+      'Be evidence-based, concise, and decision-ready.',
+      'Do not invent facts. If evidence is limited, state explicit limitations.',
       `Stop reason: ${stopReason}`,
       `Candidate turns (${candidateTurns.length}): ${JSON.stringify(candidateTurns)}`,
       `Assistant turns (${assistantTurns.length}): ${JSON.stringify(assistantTurns)}`,
       'Return schema:',
       '{',
       '  "summaryFeedback": "string <= 260 chars",',
-      '  "detailedFeedback": "string with strengths and risks",',
+      '  "detailedFeedback": "string with strengths and risks <= 2000 chars",',
       '  "recommendation": "strong_hire|hire|hold|no_hire",',
       '  "interviewScore": number 0-100,',
       '  "rubricScore": number 0-10,',
-      '  "nextSteps": "string"',
+      '  "nextSteps": "string <= 500 chars",',
+      '  "report": {',
+      '    "executiveSummary": "string <= 500 chars",',
+      '    "overallSignal": "strong|moderate|weak",',
+      '    "recommendationDecision": "strong_hire|hire|lean_hire|lean_no|no_hire",',
+      '    "confidence": "high|medium|low",',
+      '    "rationale": ["string", "..."],',
+      '    "scoreImplication": "string <= 300 chars",',
+      '    "calibrationNote": "string <= 200 chars",',
+      '    "competencies": [',
+      '      {',
+      '        "name": "string",',
+      '        "score": number 1-5,',
+      '        "evidence": "string",',
+      '        "strengths": ["string", "..."],',
+      '        "concerns": ["string", "..."]',
+      '      }',
+      '    ],',
+      '    "strengths": ["string", "..."],',
+      '    "risks": ["string", "..."],',
+      '    "followUpQuestions": ["string", "..."],',
+      '    "nextSteps": ["string", "..."],',
+      '    "evidenceLimitations": "string"',
+      '  }',
       '}',
     ].join('\n');
 
@@ -750,13 +871,70 @@ async function createAgentSession(
         temperature: 0.2,
       });
       const fallback = buildFallbackAssessment(stopReason);
+      const reportRaw = raw?.report || {};
+      const decision = normalizeDecision(reportRaw?.recommendationDecision);
+      const rawRecommendation = String(raw?.recommendation || '').trim();
+      const allowedLegacy = new Set(['strong_hire', 'hire', 'hold', 'no_hire']);
+      const legacyRecommendation = allowedLegacy.has(rawRecommendation)
+        ? rawRecommendation
+        : decisionToLegacyRecommendation(decision);
+      const interviewScore = Math.max(0, Math.min(100, Number(raw?.interviewScore || fallback.interviewScore) || 0));
+      const rubricScore = Math.max(0, Math.min(10, Number(raw?.rubricScore || fallback.rubricScore) || 0));
+      const competencies = Array.isArray(reportRaw?.competencies)
+        ? reportRaw.competencies
+            .map((item) => ({
+              name: String(item?.name || '').trim(),
+              score: clampInt(item?.score, 1, 5),
+              evidence: String(item?.evidence || '').trim() || 'Evidence: Not available (no transcript).',
+              strengths: Array.isArray(item?.strengths)
+                ? item.strengths.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 4)
+                : [],
+              concerns: Array.isArray(item?.concerns)
+                ? item.concerns.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 4)
+                : [],
+            }))
+            .filter((item) => item.name)
+            .slice(0, 7)
+        : fallback.report.competencies;
+
       return {
         summaryFeedback: String(raw?.summaryFeedback || '').slice(0, 260) || fallback.summaryFeedback,
         detailedFeedback: String(raw?.detailedFeedback || '').slice(0, 2000) || fallback.detailedFeedback,
-        recommendation: normalizeRecommendation(raw?.recommendation),
-        interviewScore: Math.max(0, Math.min(100, Number(raw?.interviewScore || 0) || 0)),
-        rubricScore: Math.max(0, Math.min(10, Number(raw?.rubricScore || 0) || 0)),
+        recommendation: legacyRecommendation,
+        interviewScore,
+        rubricScore,
         nextSteps: String(raw?.nextSteps || '').slice(0, 500) || fallback.nextSteps,
+        report: {
+          executiveSummary:
+            String(reportRaw?.executiveSummary || '').slice(0, 500) || fallback.report.executiveSummary,
+          overallSignal: normalizeSignal(reportRaw?.overallSignal || fallback.report.overallSignal),
+          recommendationDecision: decision,
+          confidence: normalizeConfidenceLabel(reportRaw?.confidence || fallback.report.confidence),
+          rationale: Array.isArray(reportRaw?.rationale)
+            ? reportRaw.rationale.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 8)
+            : fallback.report.rationale,
+          interviewScore,
+          rubricScore,
+          scoreImplication:
+            String(reportRaw?.scoreImplication || '').slice(0, 300) || fallback.report.scoreImplication,
+          calibrationNote:
+            String(reportRaw?.calibrationNote || '').slice(0, 200) || fallback.report.calibrationNote,
+          competencies: competencies.length > 0 ? competencies : fallback.report.competencies,
+          strengths: Array.isArray(reportRaw?.strengths)
+            ? reportRaw.strengths.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 6)
+            : fallback.report.strengths,
+          risks: Array.isArray(reportRaw?.risks)
+            ? reportRaw.risks.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 6)
+            : fallback.report.risks,
+          followUpQuestions: Array.isArray(reportRaw?.followUpQuestions)
+            ? reportRaw.followUpQuestions.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 8)
+            : fallback.report.followUpQuestions,
+          nextSteps: Array.isArray(reportRaw?.nextSteps)
+            ? reportRaw.nextSteps.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 6)
+            : fallback.report.nextSteps,
+          evidenceLimitations:
+            String(reportRaw?.evidenceLimitations || '').slice(0, 300) || fallback.report.evidenceLimitations,
+        },
       };
     } catch (err) {
       console.warn(`[agent][${roomName}] evaluation generation failed:`, err?.message || err);
@@ -782,6 +960,7 @@ async function createAgentSession(
       interviewScore: Math.round(Number(assessment.interviewScore || 0)),
       rubricScore: Number(Number(assessment.rubricScore || 0).toFixed(1)),
       nextSteps: assessment.nextSteps,
+      assessmentReport: assessment.report,
       transcriptText: buildTranscriptText(),
     };
 

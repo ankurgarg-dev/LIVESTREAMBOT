@@ -27,6 +27,18 @@
   gap: 0.6rem;
 }
 
+.field {
+  display: grid;
+  gap: 0.28rem;
+  align-content: start;
+}
+
+.fieldLabel {
+  font-size: 0.8rem;
+  color: #2d4c5b;
+  font-weight: 600;
+}
+
 .row {
   display: flex;
   flex-wrap: wrap;
@@ -41,6 +53,21 @@
   background: #fff;
   display: grid;
   gap: 0.35rem;
+}
+
+.inlineSuggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.pill {
+  border: 1px solid #aec9d7;
+  background: #f3f9fc;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  padding: 0.15rem 0.5rem;
+  color: #244857;
 }
 
 .tags {

@@ -26,16 +26,66 @@ function decodeTextBuffer(buffer: Buffer): string {
   return utf8;
 }
 
+function decodeXmlEntities(input: string): string {
+  return input
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_m, d) => String.fromCharCode(Number(d)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_m, h) => String.fromCharCode(parseInt(h, 16)));
+}
+
+function docxXmlToText(xml: string): string {
+  const withBreaks = xml
+    .replace(/<\/w:p>/g, '\n')
+    .replace(/<\/w:tr>/g, '\n')
+    .replace(/<w:tab[^>]*\/>/g, '\t')
+    .replace(/<w:br[^>]*\/>/g, '\n');
+  const noTags = withBreaks.replace(/<[^>]+>/g, ' ');
+  return decodeXmlEntities(noTags)
+    .replace(/\r/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
+async function extractDocxTextFallback(wordPath: string): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync('unzip', ['-p', wordPath, 'word/document.xml']);
+    return docxXmlToText(stdout);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'docx unzip extraction failed';
+    if (message.includes('ENOENT')) {
+      throw new Error('Unable to read .docx on this runtime (missing textutil/unzip).');
+    }
+    throw new Error(`Failed to parse .docx content. ${message}`);
+  }
+}
+
 async function extractWordText(buffer: Buffer, extension: 'doc' | 'docx'): Promise<string> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'jd-docx-'));
   const wordPath = path.join(tempDir, `${randomUUID()}.${extension}`);
   try {
     await fs.writeFile(wordPath, buffer);
-    const { stdout } = await execFileAsync('textutil', ['-convert', 'txt', '-stdout', wordPath]);
-    return stdout.trim();
+    try {
+      const { stdout } = await execFileAsync('textutil', ['-convert', 'txt', '-stdout', wordPath]);
+      const text = stdout.trim();
+      if (text) return text;
+    } catch {
+      // Fallbacks below.
+    }
+
+    if (extension === 'docx') {
+      const fallback = await extractDocxTextFallback(wordPath);
+      if (fallback) return fallback;
+    }
+    throw new Error(`Failed to read .${extension} file. Extracted content was empty.`);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Word extraction failed';
-    if (message.includes('ENOENT')) {
+    if (message.includes('ENOENT') || message.includes('missing textutil/unzip')) {
       throw new Error('Word file extraction is not available on this runtime. Use .txt/.md/.json/.csv or paste JD text.');
     }
     throw new Error(`Failed to read .${extension} file. ${message}`);

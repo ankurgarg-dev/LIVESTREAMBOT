@@ -15,6 +15,7 @@ import {
   type PositionConfigCore,
 } from '@/lib/position/types';
 import { applyDeterministicMapping } from '@/lib/position/logic';
+import commonSkillTags from '@/master_data/common_skill_tags.json';
 import styles from './page.module.css';
 
 type PrefillApiResponse = {
@@ -40,6 +41,53 @@ type PositionRecord = PositionConfigCore & {
 };
 
 const SUPPORTED_JD_FILE_PATTERN = /\.(txt|md|json|csv|doc|docx)$/i;
+const COMMON_SKILL_SUGGESTIONS = (commonSkillTags as Array<{ canonical: string }>).map((s) => s.canonical);
+
+const ROLE_FAMILY_LABELS: Record<string, string> = {
+  full_stack: 'Full Stack',
+  backend: 'Backend',
+  frontend: 'Frontend',
+  data: 'Data Engineering',
+  machine_learning: 'ML / GenAI',
+  devops: 'DevOps / SRE',
+  qa: 'QA Automation',
+  mobile: 'Mobile',
+  security: 'Security',
+};
+
+const ROUND_TYPE_LABELS: Record<string, string> = {
+  screening: 'Screening',
+  standard: 'Standard',
+  deep_dive: 'Deep Dive',
+};
+
+const DEEP_DIVE_LABELS: Record<string, string> = {
+  none: 'None',
+  coding: 'Coding',
+  system_design: 'System Design',
+  case_study: 'Case Study',
+  domain: 'Domain Expertise',
+};
+
+const STRICTNESS_LABELS: Record<string, string> = {
+  lenient: 'Lenient',
+  balanced: 'Balanced',
+  strict: 'Strict',
+};
+
+const EVALUATION_POLICY_LABELS: Record<string, string> = {
+  skills_only: 'Skills Only',
+  holistic: 'Holistic',
+  potential_weighted: 'Potential Weighted',
+  bar_raiser: 'Bar Raiser',
+};
+
+function humanize(value: string): string {
+  return value
+    .split('_')
+    .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
+    .join(' ');
+}
 
 function emptyConfig(): PositionConfigCore {
   return {
@@ -65,19 +113,26 @@ function TagInput(props: {
   values: string[];
   onChange: (next: string[]) => void;
   placeholder: string;
+  suggestions?: string[];
 }) {
   const [draft, setDraft] = React.useState('');
-  const addTag = () => {
-    const value = draft.trim();
+  const datalistId = React.useId();
+
+  const addTagValue = (raw: string) => {
+    const value = raw.trim();
     if (!value) return;
     const next = Array.from(new Set([...props.values, value]));
     props.onChange(next);
     setDraft('');
   };
 
+  const addTag = () => {
+    addTagValue(draft);
+  };
+
   return (
     <div className={styles.tagWrap}>
-      <strong>{props.label}</strong>
+      <strong className={styles.fieldLabel}>{props.label}</strong>
       <div className={styles.tags}>
         {props.values.map((tag) => (
           <span className={styles.tag} key={tag}>
@@ -93,6 +148,7 @@ function TagInput(props: {
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           placeholder={props.placeholder}
+          list={props.suggestions?.length ? datalistId : undefined}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault();
@@ -104,6 +160,22 @@ function TagInput(props: {
           Add
         </button>
       </div>
+      {props.suggestions && props.suggestions.length > 0 ? (
+        <>
+          <datalist id={datalistId}>
+            {props.suggestions.map((option) => (
+              <option key={option} value={option} />
+            ))}
+          </datalist>
+          <div className={styles.inlineSuggestions}>
+            {props.suggestions.slice(0, 10).map((item) => (
+              <button type="button" key={item} className={styles.pill} onClick={() => addTagValue(item)}>
+                {item}
+              </button>
+            ))}
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -351,80 +423,110 @@ export default function NewPositionPage() {
             </p>
           ))}
 
+          <div className={styles.grid2}>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Role Title</span>
+              <input
+                value={finalConfig.role_title}
+                onChange={(e) => setFinalConfig((prev) => ({ ...prev, role_title: e.target.value }))}
+                placeholder="Role title"
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Experience Level</span>
+              <select value={finalConfig.level} onChange={(e) => onRoleOrLevelChange({ level: e.target.value as PositionConfigCore['level'] })}>
+                {LEVELS.map((v) => (
+                  <option key={v} value={v}>
+                    {humanize(v)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
           <div className={styles.grid3}>
-            <input
-              value={finalConfig.role_title}
-              onChange={(e) => setFinalConfig((prev) => ({ ...prev, role_title: e.target.value }))}
-              placeholder="Role title"
-            />
-            <select value={finalConfig.role_family} onChange={(e) => onRoleOrLevelChange({ role_family: e.target.value as PositionConfigCore['role_family'] })}>
-              {ROLE_FAMILIES.map((v) => (
-                <option key={v} value={v}>
-                  {v}
-                </option>
-              ))}
-            </select>
-            <select value={finalConfig.level} onChange={(e) => onRoleOrLevelChange({ level: e.target.value as PositionConfigCore['level'] })}>
-              {LEVELS.map((v) => (
-                <option key={v} value={v}>
-                  {v}
-                </option>
-              ))}
-            </select>
-            <select
-              value={finalConfig.interview_round_type}
-              onChange={(e) => setFinalConfig((prev) => ({ ...prev, interview_round_type: e.target.value as PositionConfigCore['interview_round_type'] }))}
-            >
-              {INTERVIEW_ROUND_TYPES.map((v) => (
-                <option key={v} value={v}>
-                  {v}
-                </option>
-              ))}
-            </select>
-            <select value={finalConfig.archetype_id} onChange={(e) => setFinalConfig((prev) => ({ ...prev, archetype_id: e.target.value as PositionConfigCore['archetype_id'] }))}>
-              {ARCHETYPES.map((v) => (
-                <option key={v} value={v}>
-                  {v}
-                </option>
-              ))}
-            </select>
-            <select
-              value={finalConfig.duration_minutes}
-              onChange={(e) => setFinalConfig((prev) => ({ ...prev, duration_minutes: Number(e.target.value) as PositionConfigCore['duration_minutes'] }))}
-            >
-              {DURATIONS.map((v) => (
-                <option key={v} value={v}>
-                  {v}
-                </option>
-              ))}
-            </select>
-            <select
-              value={finalConfig.deep_dive_mode}
-              onChange={(e) => setFinalConfig((prev) => ({ ...prev, deep_dive_mode: e.target.value as PositionConfigCore['deep_dive_mode'] }))}
-            >
-              {DEEP_DIVE_MODES.map((v) => (
-                <option key={v} value={v}>
-                  {v}
-                </option>
-              ))}
-            </select>
-            <select value={finalConfig.strictness} onChange={(e) => setFinalConfig((prev) => ({ ...prev, strictness: e.target.value as PositionConfigCore['strictness'] }))}>
-              {STRICTNESS_LEVELS.map((v) => (
-                <option key={v} value={v}>
-                  {v}
-                </option>
-              ))}
-            </select>
-            <select
-              value={finalConfig.evaluation_policy}
-              onChange={(e) => setFinalConfig((prev) => ({ ...prev, evaluation_policy: e.target.value as PositionConfigCore['evaluation_policy'] }))}
-            >
-              {EVALUATION_POLICIES.map((v) => (
-                <option key={v} value={v}>
-                  {v}
-                </option>
-              ))}
-            </select>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Role Family</span>
+              <select value={finalConfig.role_family} onChange={(e) => onRoleOrLevelChange({ role_family: e.target.value as PositionConfigCore['role_family'] })}>
+                {ROLE_FAMILIES.map((v) => (
+                  <option key={v} value={v}>
+                    {ROLE_FAMILY_LABELS[v] || humanize(v)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Interview Round Type</span>
+              <select
+                value={finalConfig.interview_round_type}
+                onChange={(e) => setFinalConfig((prev) => ({ ...prev, interview_round_type: e.target.value as PositionConfigCore['interview_round_type'] }))}
+              >
+                {INTERVIEW_ROUND_TYPES.map((v) => (
+                  <option key={v} value={v}>
+                    {ROUND_TYPE_LABELS[v] || humanize(v)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Question Archetype</span>
+              <select value={finalConfig.archetype_id} onChange={(e) => setFinalConfig((prev) => ({ ...prev, archetype_id: e.target.value as PositionConfigCore['archetype_id'] }))}>
+                {ARCHETYPES.map((v) => (
+                  <option key={v} value={v}>
+                    {humanize(v)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Duration (Minutes)</span>
+              <select
+                value={finalConfig.duration_minutes}
+                onChange={(e) => setFinalConfig((prev) => ({ ...prev, duration_minutes: Number(e.target.value) as PositionConfigCore['duration_minutes'] }))}
+              >
+                {DURATIONS.map((v) => (
+                  <option key={v} value={v}>
+                    {v} minutes
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Deep Dive Mode</span>
+              <select
+                value={finalConfig.deep_dive_mode}
+                onChange={(e) => setFinalConfig((prev) => ({ ...prev, deep_dive_mode: e.target.value as PositionConfigCore['deep_dive_mode'] }))}
+              >
+                {DEEP_DIVE_MODES.map((v) => (
+                  <option key={v} value={v}>
+                    {DEEP_DIVE_LABELS[v] || humanize(v)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Assessment Strictness</span>
+              <select value={finalConfig.strictness} onChange={(e) => setFinalConfig((prev) => ({ ...prev, strictness: e.target.value as PositionConfigCore['strictness'] }))}>
+                {STRICTNESS_LEVELS.map((v) => (
+                  <option key={v} value={v}>
+                    {STRICTNESS_LABELS[v] || humanize(v)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>Evaluation Policy</span>
+              <select
+                value={finalConfig.evaluation_policy}
+                onChange={(e) => setFinalConfig((prev) => ({ ...prev, evaluation_policy: e.target.value as PositionConfigCore['evaluation_policy'] }))}
+              >
+                {EVALUATION_POLICIES.map((v) => (
+                  <option key={v} value={v}>
+                    {EVALUATION_POLICY_LABELS[v] || humanize(v)}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
 
           <TagInput
@@ -432,18 +534,21 @@ export default function NewPositionPage() {
             values={finalConfig.must_haves}
             onChange={(next) => setFinalConfig((prev) => ({ ...prev, must_haves: next.slice(0, 8) }))}
             placeholder="Add must-have skill"
+            suggestions={COMMON_SKILL_SUGGESTIONS}
           />
           <TagInput
             label="Nice to haves"
             values={finalConfig.nice_to_haves}
             onChange={(next) => setFinalConfig((prev) => ({ ...prev, nice_to_haves: next.slice(0, 8) }))}
             placeholder="Add nice-to-have skill"
+            suggestions={COMMON_SKILL_SUGGESTIONS}
           />
           <TagInput
             label="Tech stack"
             values={finalConfig.tech_stack}
             onChange={(next) => setFinalConfig((prev) => ({ ...prev, tech_stack: next.slice(0, 15) }))}
             placeholder="Add tech"
+            suggestions={COMMON_SKILL_SUGGESTIONS}
           />
           <TagInput
             label="Focus areas"
@@ -458,6 +563,7 @@ export default function NewPositionPage() {
               }))
             }
             placeholder="Add focus area"
+            suggestions={FOCUS_AREAS.map((f) => humanize(f))}
           />
 
           <textarea

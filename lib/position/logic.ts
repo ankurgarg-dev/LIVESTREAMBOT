@@ -249,6 +249,11 @@ export function normalizeAndMap(
     : 'holistic';
 
   const notes = String(extraction.notes_for_interviewer || '').trim().slice(0, 600);
+  const mustHaveConf = clamp01(extraction.confidence?.must_haves, 0.4);
+  const techStackConf = clamp01(extraction.confidence?.tech_stack, 0.4);
+  const reportedOverall = clamp01(extraction.confidence?.overall, 0);
+  const inferredOverall = clamp01((roleConf + levelConf + mustHaveConf + techStackConf) / 4, 0.45);
+  const confidence = reportedOverall >= 0.1 ? reportedOverall : inferredOverall;
 
   return {
     prefill: {
@@ -269,7 +274,7 @@ export function normalizeAndMap(
     },
     missingFields: Array.from(missing),
     warnings,
-    confidence: clamp01(extraction.confidence?.overall, 0.45),
+    confidence,
   };
 }
 

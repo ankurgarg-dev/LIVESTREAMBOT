@@ -96,6 +96,30 @@ function inferSkills(text: string): string[] {
   return Array.from(new Set(out));
 }
 
+function roleFamilyToArchetype(roleFamily: RoleFamily): string {
+  switch (roleFamily) {
+    case 'backend':
+      return 'backend_services';
+    case 'frontend':
+      return 'frontend_ui';
+    case 'data':
+      return 'data_platform';
+    case 'machine_learning':
+      return 'ml_genai_engineering';
+    case 'devops':
+      return 'devops_sre';
+    case 'qa':
+      return 'qa_automation';
+    case 'mobile':
+      return 'mobile_app';
+    case 'security':
+      return 'security_engineering';
+    case 'full_stack':
+    default:
+      return 'full_stack_general';
+  }
+}
+
 function fallbackExtraction(roleTitle: string, jdText: string): PositionExtraction {
   const inputText = `${roleTitle}\n${jdText}`.trim();
   const role = detectRoleFamily(inputText);
@@ -126,7 +150,7 @@ function fallbackExtraction(roleTitle: string, jdText: string): PositionExtracti
     role_family: role.value,
     level: level.value,
     interview_round_type: inferRoundType(inputText),
-    recommended_archetype_id: role.value === 'machine_learning' ? 'ml_genai_engineering' : 'full_stack_general',
+    recommended_archetype_id: roleFamilyToArchetype(role.value),
     recommended_duration_minutes: level.value === 'lead' || level.value === 'principal' ? 90 : 60,
     must_haves: mustHaves.slice(0, 8),
     nice_to_haves: tech.slice(5, 8),
@@ -341,6 +365,30 @@ export async function extractAndPrefillPosition(input: {
   if (!Array.isArray(typed.must_haves) || typed.must_haves.length < 3) {
     typed.must_haves = heuristic.must_haves;
     typed.confidence.must_haves = Math.max(typed.confidence.must_haves || 0, heuristic.confidence.must_haves);
+  }
+  if (!Array.isArray(typed.tech_stack) || typed.tech_stack.length < 2) {
+    typed.tech_stack = heuristic.tech_stack;
+    typed.confidence.tech_stack = Math.max(typed.confidence.tech_stack || 0, heuristic.confidence.tech_stack);
+  }
+  if (!typed.recommended_archetype_id) {
+    typed.recommended_archetype_id = roleFamilyToArchetype(typed.role_family as RoleFamily);
+  }
+  if (!typed.recommended_duration_minutes || !Number.isFinite(typed.recommended_duration_minutes)) {
+    typed.recommended_duration_minutes = heuristic.recommended_duration_minutes;
+  }
+  if (!typed.confidence || typeof typed.confidence !== 'object') {
+    typed.confidence = heuristic.confidence;
+  } else {
+    const parts = [
+      Number(typed.confidence.role_family || 0),
+      Number(typed.confidence.level || 0),
+      Number(typed.confidence.must_haves || 0),
+      Number(typed.confidence.tech_stack || 0),
+    ].filter((n) => n > 0);
+    if (!typed.confidence.overall || typed.confidence.overall <= 0) {
+      const avg = parts.length > 0 ? parts.reduce((a, b) => a + b, 0) / parts.length : heuristic.confidence.overall;
+      typed.confidence.overall = Math.min(0.95, Math.max(0.45, avg));
+    }
   }
 
   const normalized = normalizeAndMap(typed, { jdText, roleTitleOverride: roleTitle });
