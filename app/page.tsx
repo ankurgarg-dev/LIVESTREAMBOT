@@ -1180,17 +1180,13 @@ export default function Page() {
                     >
                       Download Evaluation Report
                     </a>
-                    {selectedOutcome.transcriptText ? (
-                      <a
-                        href={`/api/interviews/${selectedOutcome.id}/download?kind=transcript`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Download Transcript
-                      </a>
-                    ) : (
-                      <span>Transcript not available yet</span>
-                    )}
+                    <a
+                      href={`/api/interviews/${selectedOutcome.id}/download?kind=transcript`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Download Transcript
+                    </a>
                   </div>
 
                   <div className={styles.cardButtons}>
