@@ -493,3 +493,46 @@ h2 a {
 .bc-agent-meta .lk-participant-name {
   color: #eef6ff !important;
 }
+
+.bc-agent-floating-shell {
+  position: absolute;
+  right: 1rem;
+  bottom: 6.2rem;
+  width: min(27vw, 260px);
+  aspect-ratio: 1 / 1;
+  border-radius: 22px;
+  overflow: hidden;
+  border: 1px solid rgba(130, 183, 216, 0.35);
+  box-shadow:
+    0 22px 44px rgba(0, 0, 0, 0.35),
+    inset 0 0 24px rgba(142, 221, 248, 0.16);
+  background: rgba(9, 16, 28, 0.52);
+  z-index: 9;
+}
+
+.bc-agent-floating-label {
+  position: absolute;
+  left: 0.55rem;
+  right: 0.55rem;
+  bottom: 0.55rem;
+  z-index: 12;
+  padding: 0.32rem 0.52rem;
+  border-radius: 8px;
+  background: rgba(6, 13, 25, 0.62);
+  border: 1px solid rgba(130, 183, 216, 0.28);
+  color: #e8f4ff;
+  font-size: 0.76rem;
+  font-weight: 600;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+@media (max-width: 900px) {
+  .bc-agent-floating-shell {
+    width: min(42vw, 200px);
+    right: 0.65rem;
+    bottom: 8.8rem;
+  }
+}

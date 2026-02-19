@@ -24,6 +24,7 @@ import {
   useLocalParticipant,
   useMaybeTrackRefContext,
   usePinnedTracks,
+  useRemoteParticipants,
   useRoomContext,
   useTracks,
   type MessageFormatter,
@@ -392,6 +393,50 @@ function BristleconeParticipantTile() {
   );
 }
 
+function FloatingAgentOrb({
+  trackedParticipantIdentities,
+}: {
+  trackedParticipantIdentities: Set<string>;
+}) {
+  const { localParticipant } = useLocalParticipant();
+  const remoteParticipants = useRemoteParticipants({
+    updateOnlyOn: [
+      RoomEvent.ParticipantConnected,
+      RoomEvent.ParticipantDisconnected,
+      RoomEvent.TrackPublished,
+      RoomEvent.TrackUnpublished,
+      RoomEvent.TrackSubscribed,
+      RoomEvent.TrackUnsubscribed,
+      RoomEvent.ActiveSpeakersChanged,
+    ],
+  });
+
+  const fallbackAgent = React.useMemo(() => {
+    for (const participant of remoteParticipants) {
+      if (!isAgentParticipant(participant)) continue;
+      const hasCamera = Boolean(toTrackRef(participant, Track.Source.Camera));
+      const isTracked = trackedParticipantIdentities.has(participant.identity);
+      if (!hasCamera && !isTracked) return participant;
+    }
+    return undefined;
+  }, [remoteParticipants, trackedParticipantIdentities]);
+
+  if (!fallbackAgent) return null;
+
+  return (
+    <div className="bc-agent-floating-shell" aria-label="AI audio visualizer fallback">
+      <AgentOrbOverlay
+        participant={fallbackAgent}
+        localParticipant={localParticipant}
+        variant={getAgentOrbVariant(fallbackAgent)}
+      />
+      <div className="bc-agent-floating-label">
+        {fallbackAgent.name || fallbackAgent.identity}
+      </div>
+    </div>
+  );
+}
+
 export function BristleconeVideoConference({
   chatMessageFormatter,
   SettingsComponent,
@@ -418,6 +463,14 @@ export function BristleconeVideoConference({
       onlySubscribed: false,
     },
   );
+  const trackedParticipantIdentities = React.useMemo(() => {
+    const ids = new Set<string>();
+    for (const track of tracks) {
+      const id = track?.participant?.identity;
+      if (id) ids.add(id);
+    }
+    return ids;
+  }, [tracks]);
 
   const layoutContext = useCreateLayoutContext();
   const focusTrack = usePinnedTracks(layoutContext)?.[0];
@@ -450,6 +503,7 @@ export function BristleconeVideoConference({
             </div>
           )}
           <ControlBarRecordingExtras showSettings={!!SettingsComponent} />
+          <FloatingAgentOrb trackedParticipantIdentities={trackedParticipantIdentities} />
         </div>
 
         <Chat style={{ display: showChat ? 'grid' : 'none' }} messageFormatter={chatMessageFormatter} />

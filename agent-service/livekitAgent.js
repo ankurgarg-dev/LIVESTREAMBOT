@@ -40,8 +40,12 @@ const BOT_NAME = (process.env.BOT_NAME || 'Bristlecone AI Agent').trim();
 const ROOM_IDLE_TIMEOUT_MS = Math.max(30000, Number(process.env.AGENT_ROOM_IDLE_TIMEOUT_MS || 180000));
 const ENABLE_BARGE_IN = process.env.ENABLE_BARGE_IN !== 'false';
 const EMPTY_ROOM_FINALIZE_DELAY_MS = Math.max(
-  1000,
-  Number(process.env.EMPTY_ROOM_FINALIZE_DELAY_MS || 6000),
+  3000,
+  Number(process.env.EMPTY_ROOM_FINALIZE_DELAY_MS || 8000),
+);
+const POST_JOIN_EMPTY_ROOM_FINALIZE_DELAY_MS = Math.max(
+  EMPTY_ROOM_FINALIZE_DELAY_MS,
+  Number(process.env.POST_JOIN_EMPTY_ROOM_FINALIZE_DELAY_MS || 30000),
 );
 const INTERVIEW_MODE = process.env.AGENT_INTERVIEW_MODE !== 'false';
 const AGENT_TYPE_CLASSIC = 'classic';
@@ -503,11 +507,14 @@ async function createAgentSession(
       emptyRoomStopTimer = null;
     }
     if (room.remoteParticipants.size === 0) {
+      const emptyDelayMs = candidateEverJoined
+        ? POST_JOIN_EMPTY_ROOM_FINALIZE_DELAY_MS
+        : EMPTY_ROOM_FINALIZE_DELAY_MS;
       emptyRoomStopTimer = setTimeout(() => {
         stop('room_empty').catch((err) => {
           console.error(`[agent][${roomName}] empty room stop failed:`, err);
         });
-      }, EMPTY_ROOM_FINALIZE_DELAY_MS);
+      }, emptyDelayMs);
     }
     scheduleIdleStop();
   });
