@@ -200,7 +200,7 @@ function AgentOrbOverlay({
     manager.register('waveform', WaveformVisualizer);
     manager.register('particle-halo', ParticleHaloVisualizer);
     manager.register('equalizer', EqualizerVisualizer);
-    manager.switch(variant === 'realtime_screening' ? 'equalizer' : 'particle-halo');
+    manager.switch(variant === 'realtime_screening' ? 'orb' : 'particle-halo');
     manager.setState('idle');
     managerRef.current = manager;
 
