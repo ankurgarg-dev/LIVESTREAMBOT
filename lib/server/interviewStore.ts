@@ -59,6 +59,7 @@ export type InterviewRecord = {
   summaryFeedback?: string;
   detailedFeedback?: string;
   nextSteps?: string;
+  transcriptText?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -95,6 +96,7 @@ export type InterviewUpdateInput = Partial<
     | 'detailedFeedback'
     | 'nextSteps'
     | 'agentType'
+    | 'transcriptText'
   >
 >;
 

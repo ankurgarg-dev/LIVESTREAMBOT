@@ -577,6 +577,18 @@ async function createAgentSession(
     if (transcript.length > 220) transcript.splice(0, transcript.length - 220);
   };
 
+  const buildTranscriptText = () =>
+    transcript
+      .map((entry) => {
+        const ts = entry?.ts ? new Date(entry.ts).toISOString() : nowIso();
+        const speaker = entry?.role === 'assistant' ? 'Interviewer Bot' : entry?.by || 'Candidate';
+        const text = String(entry?.text || '').replace(/\s+/g, ' ').trim();
+        return text ? `[${ts}] ${speaker}: ${text}` : '';
+      })
+      .filter(Boolean)
+      .join('\n')
+      .slice(0, 60000);
+
   const fetchLatestInterviewByRoom = async () => {
     if (!appBaseUrl) return null;
     const res = await fetch(`${appBaseUrl}/api/interviews`, {
@@ -715,6 +727,7 @@ async function createAgentSession(
       interviewScore: Math.round(Number(assessment.interviewScore || 0)),
       rubricScore: Number(Number(assessment.rubricScore || 0).toFixed(1)),
       nextSteps: assessment.nextSteps,
+      transcriptText: buildTranscriptText(),
     };
 
     try {
