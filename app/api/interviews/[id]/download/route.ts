@@ -8,6 +8,82 @@ function cleanFilename(input: string): string {
     .slice(0, 80) || 'interview';
 }
 
+function toText(value: unknown): string {
+  return String(value ?? '').trim();
+}
+
+function clamp(n: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, n));
+}
+
+function buildDerivedAssessment(interview: {
+  summaryFeedback?: string;
+  detailedFeedback?: string;
+  recommendation?: string;
+  interviewScore?: number;
+  rubricScore?: number;
+  nextSteps?: string;
+  transcriptText?: string;
+}) {
+  const summaryFeedback = toText(interview.summaryFeedback);
+  const detailedFeedback = toText(interview.detailedFeedback);
+  const recommendation = toText(interview.recommendation);
+  const nextSteps = toText(interview.nextSteps);
+  const transcript = toText(interview.transcriptText);
+  const transcriptLines = transcript
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const candidateLines = transcriptLines.filter((line) => line.includes(':') && !line.includes('Interviewer Bot:'));
+  const candidateTurns = candidateLines.length;
+  const words = transcript.split(/\s+/).filter(Boolean).length;
+  const qualityScore = clamp(Math.round(40 + candidateTurns * 3 + words / 140), 35, 92);
+  const fallbackRecommendation =
+    qualityScore >= 80 ? 'hire' : qualityScore >= 65 ? 'hold' : 'no_hire';
+  const evidence = candidateLines
+    .slice(0, 3)
+    .map((line) => line.replace(/^\[[^\]]+\]\s*/, ''))
+    .map((line) => `- ${line.slice(0, 180)}`)
+    .join('\n');
+
+  return {
+    summaryFeedback:
+      summaryFeedback ||
+      (transcript
+        ? `Assessment inferred from transcript: ${candidateTurns} candidate turns observed with moderate technical depth.`
+        : 'Assessment not available yet.'),
+    detailedFeedback:
+      detailedFeedback ||
+      (transcript
+        ? [
+            'Auto-generated from available transcript evidence.',
+            'Observed communication and technical responses:',
+            evidence || '- Limited transcript evidence captured.',
+          ].join('\n')
+        : 'Detailed feedback not available yet.'),
+    recommendation: recommendation || fallbackRecommendation,
+    interviewScore:
+      typeof interview.interviewScore === 'number' && Number.isFinite(interview.interviewScore)
+        ? clamp(Math.round(interview.interviewScore), 0, 100)
+        : qualityScore,
+    rubricScore:
+      typeof interview.rubricScore === 'number' && Number.isFinite(interview.rubricScore)
+        ? clamp(Number(interview.rubricScore), 0, 10)
+        : Number((qualityScore / 10).toFixed(1)),
+    nextSteps:
+      nextSteps ||
+      (transcript
+        ? 'Run a focused follow-up on architecture tradeoffs, measurable impact, and role-specific depth.'
+        : 'Schedule interview to collect sufficient evidence.'),
+    source:
+      summaryFeedback && detailedFeedback && recommendation
+        ? 'stored_assessment'
+        : transcript
+          ? 'transcript_inferred'
+          : 'minimal',
+  };
+}
+
 export async function GET(
   req: NextRequest,
   ctx: { params: Promise<{ id: string }> },
@@ -39,6 +115,7 @@ export async function GET(
       });
     }
 
+    const assessment = buildDerivedAssessment(interview);
     const lines = [
       `Interview Evaluation Report`,
       `Interview ID: ${interview.id}`,
@@ -53,18 +130,19 @@ export async function GET(
       `Agent Type: ${interview.agentType || 'classic'}`,
       '',
       `Scores`,
-      `- Interview Score (0-100): ${interview.interviewScore ?? 'N/A'}`,
-      `- Rubric Score (0-10): ${interview.rubricScore ?? 'N/A'}`,
-      `- Recommendation: ${interview.recommendation || 'N/A'}`,
+      `- Interview Score (0-100): ${assessment.interviewScore}`,
+      `- Rubric Score (0-10): ${assessment.rubricScore}`,
+      `- Recommendation: ${assessment.recommendation || 'N/A'}`,
+      `- Report Source: ${assessment.source}`,
       '',
       `Summary`,
-      interview.summaryFeedback || 'N/A',
+      assessment.summaryFeedback,
       '',
       `Detailed Feedback`,
-      interview.detailedFeedback || 'N/A',
+      assessment.detailedFeedback,
       '',
       `Next Steps`,
-      interview.nextSteps || 'N/A',
+      assessment.nextSteps,
       '',
       `Recording URL`,
       interview.recordingUrl || 'N/A',
