@@ -365,7 +365,26 @@ function toHttpUrl(raw) {
 function getAppBaseUrl() {
   const explicit = String(process.env.AGENT_APP_BASE_URL || process.env.APP_BASE_URL || '').trim();
   if (explicit) return explicit.replace(/\/+$/, '');
-  return toHttpUrl(process.env.LIVEKIT_URL || '');
+  return '';
+}
+
+function getAppBaseUrls() {
+  const explicit = getAppBaseUrl();
+  const fromLivekit = toHttpUrl(process.env.LIVEKIT_URL || '');
+  const fromSite = String(process.env.SITE_URL || process.env.NEXT_PUBLIC_APP_URL || '').trim();
+  const defaultLocal = ['http://127.0.0.1:3000', 'http://localhost:3000'];
+
+  const all = [
+    ...String(explicit || '')
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean),
+    fromLivekit,
+    fromSite.replace(/\/+$/, ''),
+    ...defaultLocal,
+  ].filter(Boolean);
+
+  return Array.from(new Set(all));
 }
 
 function normalizeRecommendation(value) {
@@ -577,7 +596,38 @@ async function createAgentSession(
   let processingInputQueue = false;
   let queueWorker = Promise.resolve();
   const inputQueue = [];
-  const appBaseUrl = getAppBaseUrl();
+  const appBaseUrls = getAppBaseUrls();
+  let lastGoodAppBaseUrl = appBaseUrls[0] || '';
+  const apiRequestTimeoutMs = Math.max(1200, Number(process.env.AGENT_API_TIMEOUT_MS || 3500));
+  const apiRetryCount = Math.max(1, Number(process.env.AGENT_API_RETRY_COUNT || 2));
+
+  const fetchAppApi = async (pathName, options = {}) => {
+    const bases = [lastGoodAppBaseUrl, ...appBaseUrls].filter(Boolean);
+    let lastErr = null;
+
+    for (const base of Array.from(new Set(bases))) {
+      for (let i = 0; i < apiRetryCount; i += 1) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), apiRequestTimeoutMs + i * 800);
+        try {
+          const res = await fetch(`${base}${pathName}`, {
+            ...options,
+            signal: controller.signal,
+          });
+          if (res.ok) {
+            lastGoodAppBaseUrl = base;
+            return res;
+          }
+          lastErr = new Error(`${options.method || 'GET'} ${pathName} failed via ${base} (${res.status})`);
+        } catch (err) {
+          lastErr = err;
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+    }
+    throw lastErr || new Error(`API request failed for ${pathName}`);
+  };
 
   const appendTranscript = (entry) => {
     transcript.push(entry);
@@ -597,12 +647,11 @@ async function createAgentSession(
       .slice(0, 60000);
 
   const fetchLatestInterviewByRoom = async () => {
-    if (!appBaseUrl) return null;
-    const res = await fetch(`${appBaseUrl}/api/interviews`, {
+    if (appBaseUrls.length === 0) return null;
+    const res = await fetchAppApi('/api/interviews', {
       method: 'GET',
       headers: { Accept: 'application/json' },
     });
-    if (!res.ok) throw new Error(`list interviews failed (${res.status})`);
     const json = await res.json();
     const items = Array.isArray(json?.interviews) ? json.interviews : [];
     return (
@@ -614,8 +663,8 @@ async function createAgentSession(
   };
 
   const patchInterview = async (id, payload) => {
-    if (!appBaseUrl || !id) return null;
-    const res = await fetch(`${appBaseUrl}/api/interviews/${encodeURIComponent(id)}`, {
+    if (!id) return null;
+    const res = await fetchAppApi(`/api/interviews/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       headers: {
         Accept: 'application/json',
@@ -623,7 +672,6 @@ async function createAgentSession(
       },
       body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error(`patch interview failed (${res.status})`);
     const json = await res.json();
     return json?.interview || null;
   };

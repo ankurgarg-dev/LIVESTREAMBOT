@@ -194,6 +194,14 @@ function AgentOrbOverlay({
   const localIsSpeaking = useIsSpeaking(localParticipant);
 
   React.useEffect(() => {
+    if (variant === 'realtime_screening') {
+      return () => {
+        if (thinkingTimeoutRef.current) {
+          clearTimeout(thinkingTimeoutRef.current);
+          thinkingTimeoutRef.current = null;
+        }
+      };
+    }
     if (!containerRef.current) return;
 
     const manager = new VisualizerManager(containerRef.current);
@@ -201,7 +209,7 @@ function AgentOrbOverlay({
     manager.register('waveform', WaveformVisualizer);
     manager.register('particle-halo', ParticleHaloVisualizer);
     manager.register('equalizer', EqualizerVisualizer);
-    manager.switch(variant === 'realtime_screening' ? 'orb' : 'particle-halo');
+    manager.switch('particle-halo');
     manager.setState('idle');
     managerRef.current = manager;
 
@@ -231,11 +239,12 @@ function AgentOrbOverlay({
   }, [variant]);
 
   React.useEffect(() => {
+    if (variant === 'realtime_screening') return;
     const manager = managerRef.current;
     if (!manager) return;
 
     manager.setState(visualState);
-  }, [visualState]);
+  }, [variant, visualState]);
 
   React.useEffect(() => {
     if (isSpeaking) {
@@ -278,6 +287,7 @@ function AgentOrbOverlay({
   }, [isSpeaking, localIsSpeaking]);
 
   React.useEffect(() => {
+    if (variant === 'realtime_screening') return;
     const manager = managerRef.current;
     if (!manager) return;
 
@@ -329,20 +339,34 @@ function AgentOrbOverlay({
     if (context.state !== 'running') {
       context.resume().catch(() => undefined);
     }
-  }, [participant, localParticipant, isSpeaking, localIsSpeaking]);
+  }, [participant, localParticipant, isSpeaking, localIsSpeaking, variant]);
+
+  if (variant === 'realtime_screening') {
+    const stateClass =
+      visualState === 'speaking'
+        ? 'is-speaking'
+        : visualState === 'thinking'
+          ? 'is-thinking'
+          : localIsSpeaking
+            ? 'is-listening'
+            : 'is-idle';
+
+    return (
+      <div className="bc-realtime-simple-orb" aria-label="Realtime screening orb">
+        <div className="bc-agent-orb-badge">Realtime Screening</div>
+        <div className={`bc-realtime-core ${stateClass}`} />
+        <div className={`bc-realtime-ring r1 ${stateClass}`} />
+        <div className={`bc-realtime-ring r2 ${stateClass}`} />
+        <div className={`bc-realtime-ring r3 ${stateClass}`} />
+      </div>
+    );
+  }
 
   return (
     <div
-      className={`bc-agent-orb-shell ${
-        variant === 'realtime_screening'
-          ? 'bc-agent-orb-shell--realtime'
-          : 'bc-agent-orb-shell--classic'
-      }`}
+      className="bc-agent-orb-shell bc-agent-orb-shell--classic"
       aria-label="AI audio visualizer"
     >
-      {variant === 'realtime_screening' ? (
-        <div className="bc-agent-orb-badge">Realtime Screening</div>
-      ) : null}
       <div ref={containerRef} className="bc-agent-orb-canvas" />
     </div>
   );
