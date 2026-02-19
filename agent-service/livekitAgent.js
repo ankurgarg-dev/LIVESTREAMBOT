@@ -44,6 +44,9 @@ const EMPTY_ROOM_FINALIZE_DELAY_MS = Math.max(
   Number(process.env.EMPTY_ROOM_FINALIZE_DELAY_MS || 6000),
 );
 const INTERVIEW_MODE = process.env.AGENT_INTERVIEW_MODE !== 'false';
+const AGENT_TYPE_CLASSIC = 'classic';
+const AGENT_TYPE_REALTIME_SCREENING = 'realtime_screening';
+const SCREENING_MAX_MINUTES = Math.max(1, Number(process.env.SCREENING_AGENT_MAX_MINUTES || 10));
 
 class PcmAudioPump {
   constructor(audioSource, { frameSamples = FRAME_SAMPLES, maxQueueSeconds = 3 } = {}) {
@@ -327,9 +330,16 @@ function normalizeRoomName(raw) {
     .replace(/^-+|-+$/g, '');
 }
 
-function botIdentityForRoom(roomName) {
+function normalizeAgentType(raw) {
+  return String(raw || '').trim() === AGENT_TYPE_REALTIME_SCREENING
+    ? AGENT_TYPE_REALTIME_SCREENING
+    : AGENT_TYPE_CLASSIC;
+}
+
+function botIdentityForRoom(roomName, agentType = AGENT_TYPE_CLASSIC) {
   const suffix = normalizeRoomName(roomName).slice(0, 32) || 'room';
-  return `${BOT_IDENTITY_BASE}-${suffix}`;
+  const typeSuffix = agentType === AGENT_TYPE_REALTIME_SCREENING ? 'rt' : 'cl';
+  return `${BOT_IDENTITY_BASE}-${typeSuffix}-${suffix}`;
 }
 
 function isBotIdentity(identity) {
@@ -388,6 +398,29 @@ function buildInterviewRuntimeInstruction({ candidateContext = '', roleContext =
   ].join(' ') + contextBlock;
 }
 
+function buildRealtimeScreeningRuntimeInstruction({ candidateContext = '', roleContext = '' } = {}) {
+  const contextLines = [];
+  if (candidateContext) contextLines.push(`Candidate context: ${candidateContext}`);
+  if (roleContext) contextLines.push(`Role context: ${roleContext}`);
+  const contextBlock = contextLines.length ? `\n\nKnown context:\n${contextLines.join('\n')}` : '';
+
+  return [
+    'You are a conversational screening interviewer for a strict 10-minute live call.',
+    'Keep the tone natural and human, but be efficient and focused.',
+    'Flow:',
+    '1) 30-45s intro and consent.',
+    '2) 2-3 concise background and relevance questions.',
+    '3) One practical project probe for depth and ownership.',
+    '4) A few short technical theory checks for coverage.',
+    '5) Brief close and next-step summary.',
+    'Rules:',
+    '- Ask one question at a time.',
+    '- Do not repeat the same question more than once.',
+    '- If candidate says skip or does not know, acknowledge and move on.',
+    '- Keep responses short and spoken-friendly.',
+  ].join(' ') + contextBlock;
+}
+
 async function createJoinToken({ roomName, identity, name }) {
   const token = new AccessToken(process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET, {
     identity,
@@ -405,10 +438,18 @@ async function createJoinToken({ roomName, identity, name }) {
   return token.toJwt();
 }
 
-async function createAgentSession(roomName, { interactiveStdin = false, onStop } = {}) {
+async function createAgentSession(
+  roomName,
+  { interactiveStdin = false, onStop, agentType = AGENT_TYPE_CLASSIC } = {},
+) {
+  const selectedAgentType = normalizeAgentType(agentType);
   const livekitUrl = normalizeLiveKitUrl(process.env.LIVEKIT_URL);
-  const identity = botIdentityForRoom(roomName);
-  const token = await createJoinToken({ roomName, identity, name: BOT_NAME });
+  const identity = botIdentityForRoom(roomName, selectedAgentType);
+  const selectedBotName =
+    selectedAgentType === AGENT_TYPE_REALTIME_SCREENING
+      ? String(process.env.BOT_NAME_REALTIME_SCREENING || 'Bristlecone Realtime Screening Agent').trim()
+      : BOT_NAME;
+  const token = await createJoinToken({ roomName, identity, name: selectedBotName });
 
   const room = new Room();
   let stopping = false;
@@ -421,6 +462,7 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
   let interviewStartedAt = '';
   let finalReportPublished = false;
   let interviewId = '';
+  let screeningHardStopTimer = null;
   const transcript = [];
 
   room.on(RoomEvent.ParticipantConnected, (participant) => {
@@ -433,6 +475,10 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
       clearTimeout(emptyRoomStopTimer);
       emptyRoomStopTimer = null;
     }
+    if (screeningHardStopTimer) {
+      clearTimeout(screeningHardStopTimer);
+      screeningHardStopTimer = null;
+    }
     if (!isBotIdentity(participant.identity) && INTERVIEW_MODE && !kickoffSent) {
       kickoffSent = true;
       queueUserTurn('__bootstrap_interview_start__', 'agent_bootstrap');
@@ -440,6 +486,13 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
     if (!isBotIdentity(participant.identity)) {
       candidateEverJoined = true;
       ensureInterviewStarted().catch(() => undefined);
+      if (selectedAgentType === AGENT_TYPE_REALTIME_SCREENING && !screeningHardStopTimer) {
+        screeningHardStopTimer = setTimeout(() => {
+          stop('screening_time_limit').catch((err) => {
+            console.error(`[agent][${roomName}] screening stop failed:`, err);
+          });
+        }, SCREENING_MAX_MINUTES * 60 * 1000);
+      }
     }
   });
 
@@ -465,9 +518,19 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
 
   let audioPump = null;
 
+  const llmModel =
+    selectedAgentType === AGENT_TYPE_REALTIME_SCREENING
+      ? process.env.OPENAI_REALTIME_SCREENING_MODEL || 'gpt-realtime-mini'
+      : process.env.OPENAI_MODEL || 'gpt-4o-mini';
+  const llmFallbackModel =
+    selectedAgentType === AGENT_TYPE_REALTIME_SCREENING
+      ? process.env.OPENAI_REALTIME_SCREENING_FALLBACK_MODEL || 'gpt-4o-mini'
+      : '';
+
   const llmService = new LLMService({
     apiKey: process.env.OPENAI_API_KEY,
-    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    model: llmModel,
+    fallbackModel: llmFallbackModel,
     systemPrompt: process.env.OPENAI_SYSTEM_PROMPT || undefined,
   });
 
@@ -496,6 +559,9 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
     process.env.OPENAI_RUNTIME_INSTRUCTION ||
       'Have a natural spoken conversation. Keep responses brief, clear, and friendly.',
   );
+  const screeningRuntimeInstruction = String(
+    process.env.OPENAI_REALTIME_SCREENING_RUNTIME_INSTRUCTION || '',
+  ).trim();
 
   const activeInputStreams = new Map();
   let assistantState = 'idle'; // idle | thinking | speaking
@@ -715,7 +781,10 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
         ? 'Start the interview now with a warm intro, set expectations, and ask for consent to begin.'
         : trimmed;
     const runtimeInstruction = INTERVIEW_MODE
-      ? buildInterviewRuntimeInstruction({ candidateContext, roleContext })
+      ? selectedAgentType === AGENT_TYPE_REALTIME_SCREENING
+        ? screeningRuntimeInstruction ||
+          buildRealtimeScreeningRuntimeInstruction({ candidateContext, roleContext })
+        : buildInterviewRuntimeInstruction({ candidateContext, roleContext })
       : fallbackRuntimeInstruction;
 
     if (sourceIdentity !== 'agent_bootstrap') {
@@ -754,7 +823,7 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
       await audioPump.writePcm16le(pcmChunk);
     }
     if (assistantText.trim()) {
-      appendTranscript({ role: 'assistant', by: BOT_NAME, text: assistantText.trim(), ts: nowIso() });
+      appendTranscript({ role: 'assistant', by: selectedBotName, text: assistantText.trim(), ts: nowIso() });
     }
     assistantState = 'idle';
   };
@@ -973,6 +1042,7 @@ async function createAgentSession(roomName, { interactiveStdin = false, onStop }
   return {
     roomName,
     identity,
+    agentType: selectedAgentType,
     stop,
     hasParticipants: () => room.remoteParticipants.size > 0,
   };
@@ -1010,21 +1080,27 @@ async function startManager() {
     process.env.AGENT_RESET_SESSION_ON_JOIN === 'true' ||
     process.env.AGENT_RESET_SESSION_ON_JOIN === '1';
 
-  const ensureSession = async (roomName, { interactiveStdin = false, reason = 'api' } = {}) => {
+  const ensureSession = async (
+    roomName,
+    { interactiveStdin = false, reason = 'api', agentType = AGENT_TYPE_CLASSIC } = {},
+  ) => {
     const normalized = normalizeRoomName(roomName);
     if (!normalized) {
       throw new Error('roomName is required');
     }
+    const requestedAgentType = normalizeAgentType(agentType);
 
     const shouldResetExisting =
       resetSessionOnJoin && (reason === 'control-api' || reason === 'startup-default-room');
 
     if (sessions.has(normalized)) {
-      if (!shouldResetExisting) {
-        return { roomName: normalized, status: 'already_joined' };
+      const existing = sessions.get(normalized);
+      const typeChanged = existing?.agentType && existing.agentType !== requestedAgentType;
+      const shouldReset = shouldResetExisting || typeChanged;
+      if (!shouldReset) {
+        return { roomName: normalized, status: 'already_joined', agentType: requestedAgentType };
       }
 
-      const existing = sessions.get(normalized);
       sessions.delete(normalized);
       if (existing && typeof existing.stop === 'function') {
         await existing.stop('reset_on_join').catch((err) => {
@@ -1036,14 +1112,20 @@ async function startManager() {
     if (pendingJoins.has(normalized)) {
       await pendingJoins.get(normalized);
       if (sessions.has(normalized) && !shouldResetExisting) {
-        return { roomName: normalized, status: 'already_joined' };
+        const existing = sessions.get(normalized);
+        if (!existing || existing.agentType === requestedAgentType) {
+          return { roomName: normalized, status: 'already_joined', agentType: requestedAgentType };
+        }
       }
     }
 
-    console.log(`[agent-manager] joining room '${normalized}' (reason: ${reason})`);
+    console.log(
+      `[agent-manager] joining room '${normalized}' as '${requestedAgentType}' (reason: ${reason})`,
+    );
 
     const joinTask = createAgentSession(normalized, {
       interactiveStdin,
+      agentType: requestedAgentType,
       onStop: (name) => {
         sessions.delete(name);
         console.log(`[agent-manager] room session removed: '${name}'`);
@@ -1059,7 +1141,7 @@ async function startManager() {
     pendingJoins.set(normalized, joinTask);
     await joinTask;
 
-    return { roomName: normalized, status: 'joined' };
+    return { roomName: normalized, status: 'joined', agentType: requestedAgentType };
   };
 
   const controlEnabled = process.env.AGENT_CONTROL_ENABLED !== 'false';
@@ -1089,7 +1171,10 @@ async function startManager() {
         if (req.method === 'GET' && path === '/health') {
           sendJson(res, 200, {
             ok: true,
-            rooms: Array.from(sessions.keys()),
+            rooms: Array.from(sessions.values()).map((session) => ({
+              roomName: session.roomName,
+              agentType: session.agentType || AGENT_TYPE_CLASSIC,
+            })),
             pendingRooms: Array.from(pendingJoins.keys()),
           });
           return;
@@ -1098,7 +1183,10 @@ async function startManager() {
         if (req.method === 'POST' && path === '/join') {
           const body = await readJsonBody(req);
           const roomName = body?.roomName;
-          const result = await ensureSession(roomName, { reason: 'control-api' });
+          const result = await ensureSession(roomName, {
+            reason: 'control-api',
+            agentType: body?.agentType,
+          });
           sendJson(res, 200, { ok: true, ...result });
           return;
         }

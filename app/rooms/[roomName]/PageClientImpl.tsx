@@ -45,6 +45,7 @@ export function PageClientImpl(props: {
   codec: VideoCodec;
   autoJoin?: boolean;
   participantName?: string;
+  agentType?: 'classic' | 'realtime_screening';
 }) {
   const router = useRouter();
   const [roomDraft, setRoomDraft] = React.useState(props.roomName);
@@ -72,13 +73,16 @@ export function PageClientImpl(props: {
     if (props.region) {
       url.searchParams.append('region', props.region);
     }
+    if (props.agentType === 'realtime_screening') {
+      url.searchParams.append('agentType', props.agentType);
+    }
     const connectionDetailsResp = await fetch(url.toString());
     const connectionDetailsData = await connectionDetailsResp.json();
     if (!connectionDetailsResp.ok) {
       throw new Error(connectionDetailsData?.error || connectionDetailsData?.message || 'Failed to join room');
     }
     setConnectionDetails(connectionDetailsData);
-  }, [props.region, props.roomName]);
+  }, [props.agentType, props.region, props.roomName]);
   const handlePreJoinSubmit = React.useCallback(
     async (values: LocalUserChoices) => {
       setAutoJoinError('');

@@ -14,6 +14,7 @@ export default async function Page({
     codec?: string;
     autojoin?: string;
     name?: string;
+    agentType?: string;
   }>;
 }) {
   const _params = await params;
@@ -25,6 +26,8 @@ export default async function Page({
   const hq = _searchParams.hq === 'true' ? true : false;
   const autoJoin = _searchParams.autojoin === '1' || _searchParams.autojoin === 'true';
   const participantName = typeof _searchParams.name === 'string' ? _searchParams.name : undefined;
+  const agentType =
+    _searchParams.agentType === 'realtime_screening' ? 'realtime_screening' : 'classic';
 
   return (
     <PageClientImpl
@@ -34,6 +37,7 @@ export default async function Page({
       codec={codec}
       autoJoin={autoJoin}
       participantName={participantName}
+      agentType={agentType}
     />
   );
 }

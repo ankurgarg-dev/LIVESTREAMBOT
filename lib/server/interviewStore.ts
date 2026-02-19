@@ -4,6 +4,7 @@ import path from 'path';
 
 export type InterviewStatus = 'scheduled' | 'completed' | 'cancelled';
 export type Recommendation = 'strong_hire' | 'hire' | 'hold' | 'no_hire' | '';
+export type InterviewAgentType = 'classic' | 'realtime_screening';
 
 export type InterviewAssetMeta = {
   originalName: string;
@@ -43,6 +44,7 @@ export type InterviewRecord = {
   durationMinutes: number;
   timezone: string;
   notes: string;
+  agentType: InterviewAgentType;
   positionId?: string;
   positionSnapshot?: InterviewPositionSnapshot;
   cv?: InterviewAssetMeta;
@@ -73,6 +75,7 @@ export type InterviewCreateInput = {
   durationMinutes: number;
   timezone: string;
   notes: string;
+  agentType?: InterviewAgentType;
   positionId?: string;
   positionSnapshot?: InterviewPositionSnapshot;
 };
@@ -91,6 +94,7 @@ export type InterviewUpdateInput = Partial<
     | 'summaryFeedback'
     | 'detailedFeedback'
     | 'nextSteps'
+    | 'agentType'
   >
 >;
 
@@ -121,7 +125,12 @@ async function readPayload(): Promise<InterviewStorePayload> {
     if (!Array.isArray(parsed.interviews)) {
       return { interviews: [] };
     }
-    return parsed;
+    return {
+      interviews: parsed.interviews.map((entry) => ({
+        ...entry,
+        agentType: entry.agentType === 'realtime_screening' ? 'realtime_screening' : 'classic',
+      })),
+    };
   } catch {
     return { interviews: [] };
   }
@@ -146,6 +155,15 @@ export async function getInterview(id: string): Promise<InterviewRecord | undefi
   return payload.interviews.find((entry) => entry.id === id);
 }
 
+export async function getLatestInterviewByRoom(roomName: string): Promise<InterviewRecord | undefined> {
+  const target = String(roomName || '').trim().toLowerCase();
+  if (!target) return undefined;
+  const payload = await readPayload();
+  return payload.interviews
+    .filter((entry) => String(entry.roomName || '').trim().toLowerCase() === target)
+    .sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)))[0];
+}
+
 export async function createInterview(input: InterviewCreateInput): Promise<InterviewRecord> {
   const payload = await readPayload();
   const now = new Date().toISOString();
@@ -163,6 +181,7 @@ export async function createInterview(input: InterviewCreateInput): Promise<Inte
     durationMinutes: input.durationMinutes,
     timezone: input.timezone,
     notes: input.notes,
+    agentType: input.agentType === 'realtime_screening' ? 'realtime_screening' : 'classic',
     positionId: input.positionId,
     positionSnapshot: input.positionSnapshot,
     createdAt: now,

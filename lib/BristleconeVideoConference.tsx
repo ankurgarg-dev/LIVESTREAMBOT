@@ -44,6 +44,8 @@ export interface BristleconeVideoConferenceProps extends React.HTMLAttributes<HT
   SettingsComponent?: React.ComponentType;
 }
 
+type AgentOrbVariant = 'classic' | 'realtime_screening';
+
 function formatDuration(totalSeconds: number): string {
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -133,6 +135,19 @@ function isAgentParticipant(participant?: Participant): boolean {
   );
 }
 
+function getAgentOrbVariant(participant?: Participant): AgentOrbVariant {
+  if (!participant) return 'classic';
+  const probe = `${participant.identity} ${participant.name ?? ''}`.toLowerCase();
+  if (
+    probe.includes('-rt-') ||
+    probe.includes('realtime') ||
+    probe.includes('screening')
+  ) {
+    return 'realtime_screening';
+  }
+  return 'classic';
+}
+
 function sameTrackRef(
   a: TrackReferenceOrPlaceholder | undefined,
   b: TrackReferenceOrPlaceholder | undefined,
@@ -157,9 +172,11 @@ function toTrackRef(participant: Participant, source: Track.Source): TrackRefere
 function AgentOrbOverlay({
   participant,
   localParticipant,
+  variant,
 }: {
   participant: Participant;
   localParticipant?: Participant;
+  variant: AgentOrbVariant;
 }) {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const managerRef = React.useRef<VisualizerManager | null>(null);
@@ -183,7 +200,7 @@ function AgentOrbOverlay({
     manager.register('waveform', WaveformVisualizer);
     manager.register('particle-halo', ParticleHaloVisualizer);
     manager.register('equalizer', EqualizerVisualizer);
-    manager.switch('particle-halo');
+    manager.switch(variant === 'realtime_screening' ? 'equalizer' : 'particle-halo');
     manager.setState('idle');
     managerRef.current = manager;
 
@@ -210,7 +227,7 @@ function AgentOrbOverlay({
       audioContextRef.current = null;
       connectionSignatureRef.current = null;
     };
-  }, []);
+  }, [variant]);
 
   React.useEffect(() => {
     const manager = managerRef.current;
@@ -314,7 +331,17 @@ function AgentOrbOverlay({
   }, [participant, localParticipant, isSpeaking, localIsSpeaking]);
 
   return (
-    <div className="bc-agent-orb-shell" aria-label="AI audio visualizer">
+    <div
+      className={`bc-agent-orb-shell ${
+        variant === 'realtime_screening'
+          ? 'bc-agent-orb-shell--realtime'
+          : 'bc-agent-orb-shell--classic'
+      }`}
+      aria-label="AI audio visualizer"
+    >
+      {variant === 'realtime_screening' ? (
+        <div className="bc-agent-orb-badge">Realtime Screening</div>
+      ) : null}
       <div ref={containerRef} className="bc-agent-orb-canvas" />
     </div>
   );
@@ -333,6 +360,7 @@ function BristleconeParticipantTile() {
   const micRef = toTrackRef(participant, Track.Source.Microphone);
   const renderOrb =
     isAgentParticipant(participant) || (!participant.isLocal && !cameraRef && Boolean(micRef));
+  const orbVariant = getAgentOrbVariant(participant);
 
   if (!renderOrb) {
     return <ParticipantTile />;
@@ -343,7 +371,11 @@ function BristleconeParticipantTile() {
       {cameraRef ? (
         <VideoTrack trackRef={cameraRef} />
       ) : (
-        <AgentOrbOverlay participant={participant} localParticipant={localParticipant} />
+        <AgentOrbOverlay
+          participant={participant}
+          localParticipant={localParticipant}
+          variant={orbVariant}
+        />
       )}
       {micRef ? <AudioTrack trackRef={micRef} /> : null}
       <div className="lk-participant-metadata bc-agent-meta">

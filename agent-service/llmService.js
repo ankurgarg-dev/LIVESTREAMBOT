@@ -4,13 +4,20 @@ const DEFAULT_SYSTEM_PROMPT =
   'You are a concise, natural-sounding AI assistant in a live video meeting. Keep responses short and conversational. Avoid markdown, lists, or emojis.';
 
 class LLMService {
-  constructor({ apiKey, model = 'gpt-4o-mini', systemPrompt = DEFAULT_SYSTEM_PROMPT, maxTurns = 10 }) {
+  constructor({
+    apiKey,
+    model = 'gpt-4o-mini',
+    fallbackModel = '',
+    systemPrompt = DEFAULT_SYSTEM_PROMPT,
+    maxTurns = 10,
+  }) {
     if (!apiKey) {
       throw new Error('OPENAI_API_KEY is required');
     }
 
     this.client = new OpenAI({ apiKey });
     this.model = model;
+    this.fallbackModel = String(fallbackModel || '').trim();
     this.systemPrompt = systemPrompt;
     this.maxTurns = maxTurns;
     this.history = [];
@@ -30,6 +37,18 @@ class LLMService {
     }
   }
 
+  async _createChatCompletion(params) {
+    try {
+      return await this.client.chat.completions.create(params);
+    } catch (error) {
+      const fallback = this.fallbackModel;
+      if (!fallback || fallback === params.model) throw error;
+      console.warn(`[llm] primary model '${params.model}' failed, retrying with fallback '${fallback}'`);
+      this.model = fallback;
+      return this.client.chat.completions.create({ ...params, model: fallback });
+    }
+  }
+
   async *streamAssistantReply(userText, options = {}) {
     const runtimeInstruction = String(options.runtimeInstruction || '');
     if (!userText || !userText.trim()) {
@@ -39,7 +58,7 @@ class LLMService {
     this.history.push({ role: 'user', content: userText.trim() });
     this._trimHistory();
 
-    const stream = await this.client.chat.completions.create({
+    const stream = await this._createChatCompletion({
       model: this.model,
       messages: this._messages(runtimeInstruction),
       temperature: 0.6,
@@ -61,7 +80,7 @@ class LLMService {
 
   async callText(prompt, options = {}) {
     const model = options.model || this.model;
-    const response = await this.client.chat.completions.create({
+    const response = await this._createChatCompletion({
       model,
       messages: [
         { role: 'system', content: this.systemPrompt },

@@ -1,6 +1,7 @@
 import { randomString } from '@/lib/client-utils';
 import { getLiveKitURL } from '@/lib/getLiveKitURL';
 import { ensureAgentInRoom } from '@/lib/server/agentControl';
+import { getLatestInterviewByRoom } from '@/lib/server/interviewStore';
 import { ConnectionDetails } from '@/lib/types';
 import { AccessToken, AccessTokenOptions, VideoGrant } from 'livekit-server-sdk';
 import { NextRequest, NextResponse } from 'next/server';
@@ -16,6 +17,7 @@ export async function GET(request: NextRequest) {
     // Parse query parameters
     const roomName = request.nextUrl.searchParams.get('roomName');
     const participantName = request.nextUrl.searchParams.get('participantName');
+    const requestedAgentType = request.nextUrl.searchParams.get('agentType');
     const metadata = request.nextUrl.searchParams.get('metadata') ?? '';
     const region = request.nextUrl.searchParams.get('region');
     if (!LIVEKIT_URL) {
@@ -34,7 +36,13 @@ export async function GET(request: NextRequest) {
       return new NextResponse('Missing required query parameter: participantName', { status: 400 });
     }
 
-    ensureAgentInRoom(roomName).catch((error) => {
+    const latestInterview = await getLatestInterviewByRoom(roomName);
+    const agentType =
+      requestedAgentType === 'realtime_screening' || latestInterview?.agentType === 'realtime_screening'
+        ? 'realtime_screening'
+        : 'classic';
+
+    ensureAgentInRoom(roomName, agentType).catch((error) => {
       console.error('[connection-details] agent auto-join request failed:', error);
     });
 

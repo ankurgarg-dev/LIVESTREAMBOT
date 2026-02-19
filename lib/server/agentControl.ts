@@ -1,6 +1,7 @@
 const DEFAULT_AGENT_CONTROL_URL = 'http://127.0.0.1:8787/join';
+export type AgentType = 'classic' | 'realtime_screening';
 
-export async function ensureAgentInRoom(roomName: string): Promise<void> {
+export async function ensureAgentInRoom(roomName: string, agentType: AgentType = 'classic'): Promise<void> {
   const targetRoom = String(roomName || '').trim();
   if (!targetRoom) return;
 
@@ -19,7 +20,7 @@ export async function ensureAgentInRoom(roomName: string): Promise<void> {
         'Content-Type': 'application/json',
         ...(token ? { 'x-agent-token': token } : {}),
       },
-      body: JSON.stringify({ roomName: targetRoom }),
+      body: JSON.stringify({ roomName: targetRoom, agentType }),
       signal: controller.signal,
     });
 

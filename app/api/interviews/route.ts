@@ -1,6 +1,7 @@
 import {
   attachInterviewAsset,
   createInterview,
+  type InterviewAgentType,
   type InterviewPositionSnapshot,
   listInterviews,
   type InterviewCreateInput,
@@ -25,6 +26,10 @@ function isUploadedFile(value: FormDataEntryValue | null): value is File {
 function normalizeRoomName(raw: string): string {
   const safe = raw.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
   return safe || 'agent-test-room';
+}
+
+function normalizeAgentType(raw: FormDataEntryValue | null): InterviewAgentType {
+  return String(raw ?? '').trim() === 'realtime_screening' ? 'realtime_screening' : 'classic';
 }
 
 function parsePositionSnapshot(raw: FormDataEntryValue | null): InterviewPositionSnapshot | undefined {
@@ -101,6 +106,7 @@ export async function POST(req: NextRequest) {
     const defaultRoomName = process.env.LIVEKIT_ROOM || 'agent-test-room';
     const positionSnapshot = parsePositionSnapshot(form.get('positionSnapshot'));
     const positionId = String(form.get('positionId') ?? '').trim() || undefined;
+    const agentType = normalizeAgentType(form.get('agentType'));
     const fallbackJobTitle = positionSnapshot?.role_title || '';
     const durationCandidate = Number(form.get('durationMinutes') ?? positionSnapshot?.duration_minutes ?? 0);
 
@@ -116,6 +122,7 @@ export async function POST(req: NextRequest) {
       durationMinutes: Number.isFinite(durationCandidate) && durationCandidate > 0 ? durationCandidate : duration,
       timezone: String(form.get('timezone') ?? Intl.DateTimeFormat().resolvedOptions().timeZone).trim(),
       notes: String(form.get('notes') ?? '').trim(),
+      agentType,
       positionId,
       positionSnapshot,
     };

@@ -17,6 +17,7 @@ import {
 import styles from '../styles/Home.module.css';
 
 type Recommendation = 'strong_hire' | 'hire' | 'hold' | 'no_hire' | '';
+type AgentType = 'classic' | 'realtime_screening';
 type MainTab = 'dashboard' | 'positions' | 'interviews';
 type PositionDetailsTab = 'job' | 'plan' | 'candidates' | 'interviews';
 
@@ -41,6 +42,7 @@ type InterviewRecord = {
   durationMinutes: number;
   timezone: string;
   notes: string;
+  agentType: AgentType;
   positionId?: string;
   positionSnapshot?: PositionConfigCore;
   cv?: InterviewAssetMeta;
@@ -77,6 +79,7 @@ type SetupFormState = {
   timezone: string;
   roomName: string;
   notes: string;
+  agentType: AgentType;
 };
 
 function formatDate(dateStr: string): string {
@@ -128,6 +131,7 @@ function buildDefaultSetup(defaultRoom: string): SetupFormState {
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     roomName: defaultRoom,
     notes: '',
+    agentType: 'classic',
   };
 }
 
@@ -351,6 +355,16 @@ export default function Page() {
     router.push(`/?tab=interviews&interviewId=${encodeURIComponent(targetId)}`);
   };
 
+  const buildInterviewJoinUrl = (interview: InterviewRecord) => {
+    const params = new URLSearchParams();
+    if (interview.agentType === 'realtime_screening') {
+      params.set('agentType', 'realtime_screening');
+    }
+    const query = params.toString();
+    const base = `/rooms/${encodeURIComponent(interview.roomName)}`;
+    return query ? `${base}?${query}` : base;
+  };
+
   const startCreateInterview = () => {
     setEditingSetupId('');
     setSetupForm(buildDefaultSetup(defaultAgentRoom));
@@ -373,6 +387,7 @@ export default function Page() {
       timezone: interview.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
       roomName: interview.roomName,
       notes: interview.notes || '',
+      agentType: interview.agentType || 'classic',
     });
 
     if (interview.positionId) {
@@ -422,6 +437,7 @@ export default function Page() {
           timezone: setupForm.timezone,
           notes: setupForm.notes,
           roomName: setupForm.roomName,
+          agentType: setupForm.agentType,
           positionId: selectedPositionId,
           positionSnapshot: positionDraft,
         };
@@ -449,6 +465,7 @@ export default function Page() {
         formData.set('timezone', setupForm.timezone);
         formData.set('roomName', setupForm.roomName.trim() || defaultAgentRoom);
         formData.set('notes', setupForm.notes);
+        formData.set('agentType', setupForm.agentType);
         formData.set('positionId', selectedPositionId);
         formData.set('positionSnapshot', JSON.stringify(positionDraft));
 
@@ -574,7 +591,7 @@ export default function Page() {
                       <span>{`Room ${item.roomName}`}</span>
                     </div>
                     <div className={styles.cardButtons}>
-                      <button type="button" className="lk-button" onClick={() => router.push(`/rooms/${encodeURIComponent(item.roomName)}`)}>
+                      <button type="button" className="lk-button" onClick={() => router.push(buildInterviewJoinUrl(item))}>
                         Join
                       </button>
                       <button type="button" className="lk-button" onClick={() => openOutcome(item.id)}>
@@ -696,7 +713,7 @@ export default function Page() {
                                 <span>{`Room ${item.roomName}`}</span>
                               </div>
                               <div className={styles.cardButtons}>
-                                <button type="button" className="lk-button" onClick={() => router.push(`/rooms/${encodeURIComponent(item.roomName)}`)}>
+                                <button type="button" className="lk-button" onClick={() => router.push(buildInterviewJoinUrl(item))}>
                                   Join
                                 </button>
                                 <button type="button" className="lk-button" onClick={() => openOutcome(item.id)}>
@@ -785,6 +802,15 @@ export default function Page() {
                   placeholder="Room Name"
                   required
                 />
+                <select
+                  value={setupForm.agentType}
+                  onChange={(e) =>
+                    setSetupForm((prev) => ({ ...prev, agentType: e.target.value as AgentType }))
+                  }
+                >
+                  <option value="classic">Classic Interview Agent</option>
+                  <option value="realtime_screening">Realtime Screening Agent (10 min)</option>
+                </select>
 
                 {positionDraft ? (
                   <>
@@ -1031,13 +1057,14 @@ export default function Page() {
                       <span>{item.jobTitle}</span>
                       <span>{formatDate(item.scheduledAt)}</span>
                       <span>{`Duration ${item.durationMinutes} min`}</span>
+                      <span>{item.agentType === 'realtime_screening' ? 'Agent: Realtime Screening' : 'Agent: Classic'}</span>
                       <span>{`Room ${item.roomName}`}</span>
                     </div>
                     <div className={styles.cardButtons}>
                       <button type="button" className="lk-button" onClick={() => startEditInterview(item)}>
                         Edit setup
                       </button>
-                      <button type="button" className="lk-button" onClick={() => router.push(`/rooms/${encodeURIComponent(item.roomName)}`)}>
+                      <button type="button" className="lk-button" onClick={() => router.push(buildInterviewJoinUrl(item))}>
                         Join
                       </button>
                       <button type="button" className="lk-button" onClick={() => openOutcome(item.id)}>
