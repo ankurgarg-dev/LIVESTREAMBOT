@@ -405,7 +405,18 @@ export function BristleconeVideoConference({
       { source: Track.Source.Camera, withPlaceholder: true },
       { source: Track.Source.ScreenShare, withPlaceholder: false },
     ],
-    { updateOnlyOn: [RoomEvent.ActiveSpeakersChanged], onlySubscribed: false },
+    {
+      updateOnlyOn: [
+        RoomEvent.ActiveSpeakersChanged,
+        RoomEvent.ParticipantConnected,
+        RoomEvent.ParticipantDisconnected,
+        RoomEvent.TrackPublished,
+        RoomEvent.TrackUnpublished,
+        RoomEvent.TrackSubscribed,
+        RoomEvent.TrackUnsubscribed,
+      ],
+      onlySubscribed: false,
+    },
   );
 
   const layoutContext = useCreateLayoutContext();
