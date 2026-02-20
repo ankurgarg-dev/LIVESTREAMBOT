@@ -20,6 +20,12 @@ const {
 
 const { LLMService } = require('./llmService');
 const { TTSService } = require('./ttsService');
+const {
+  getDefaultClassicInterviewPrompt,
+  getDefaultRealtimeScreeningPrompt,
+  buildEvaluationReportPrompt,
+} = require('./promptTemplates');
+const { createLivekitAgent } = require('./agents/livekitAgents');
 
 const REQUIRED_ENV = ['OPENAI_API_KEY', 'LIVEKIT_URL', 'LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET'];
 for (const key of REQUIRED_ENV) {
@@ -442,52 +448,57 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function buildInterviewRuntimeInstruction({ candidateContext = '', roleContext = '' } = {}) {
-  const contextLines = [];
-  if (candidateContext) contextLines.push(`Candidate context: ${candidateContext}`);
-  if (roleContext) contextLines.push(`Role context: ${roleContext}`);
-  const contextBlock = contextLines.length ? `\n\nKnown context:\n${contextLines.join('\n')}` : '';
-
-  return [
-    'You are a human-like technical interviewer in a live voice call.',
-    'Do not behave like a rigid state machine.',
-    'Run a soft interview flow naturally:',
-    '1) Start with a warm intro, set expectations, and ask for consent to begin.',
-    '2) Ask about candidate background and experience relevant to role.',
-    '3) Deep dive into one or two concrete projects from the candidate CV/background.',
-    '4) Ask strong theoretical and practical follow-up questions tied to technologies from those projects.',
-    '5) End with a brief wrap-up and invite candidate questions.',
-    'Guidelines:',
-    '- Keep it conversational and adaptive.',
-    '- Ask one primary question at a time; short acknowledgement is fine.',
-    '- If candidate says they do not know, acknowledge and move forward gracefully.',
-    '- Avoid repeating the exact same question.',
-    '- Keep spoken responses concise and natural.',
-    '- Stay focused on interview content; do not drift to unrelated chit-chat.',
-  ].join(' ') + contextBlock;
+function firstNonEmptyText(...values) {
+  for (const value of values) {
+    const normalized = String(value ?? '').trim();
+    if (normalized) return normalized;
+  }
+  return '';
 }
 
-function buildRealtimeScreeningRuntimeInstruction({ candidateContext = '', roleContext = '' } = {}) {
+function getAgentSettingsPath() {
+  const baseDir = process.env.INTERVIEW_DATA_DIR || '/tmp/bristlecone-interviews';
+  return path.join(baseDir, 'agent-settings.json');
+}
+
+async function loadPersistedPromptTemplates() {
+  try {
+    const raw = await fs.readFile(getAgentSettingsPath(), 'utf8');
+    const parsed = JSON.parse(raw);
+    return {
+      classicPrompt: firstNonEmptyText(parsed?.classicPrompt) || getDefaultClassicInterviewPrompt(),
+      realtimePrompt: firstNonEmptyText(parsed?.realtimePrompt) || getDefaultRealtimeScreeningPrompt(),
+    };
+  } catch {
+    return {
+      classicPrompt: getDefaultClassicInterviewPrompt(),
+      realtimePrompt: getDefaultRealtimeScreeningPrompt(),
+    };
+  }
+}
+
+function buildInterviewRuntimeInstruction({ candidateContext = '', roleContext = '', basePrompt = '' } = {}) {
   const contextLines = [];
   if (candidateContext) contextLines.push(`Candidate context: ${candidateContext}`);
   if (roleContext) contextLines.push(`Role context: ${roleContext}`);
   const contextBlock = contextLines.length ? `\n\nKnown context:\n${contextLines.join('\n')}` : '';
 
-  return [
-    'You are a conversational screening interviewer for a strict 10-minute live call.',
-    'Keep the tone natural and human, but be efficient and focused.',
-    'Flow:',
-    '1) 30-45s intro and consent.',
-    '2) 2-3 concise background and relevance questions.',
-    '3) One practical project probe for depth and ownership.',
-    '4) A few short technical theory checks for coverage.',
-    '5) Brief close and next-step summary.',
-    'Rules:',
-    '- Ask one question at a time.',
-    '- Do not repeat the same question more than once.',
-    '- If candidate says skip or does not know, acknowledge and move on.',
-    '- Keep responses short and spoken-friendly.',
-  ].join(' ') + contextBlock;
+  const prompt = firstNonEmptyText(basePrompt) || getDefaultClassicInterviewPrompt();
+  return `${prompt}${contextBlock}`;
+}
+
+function buildRealtimeScreeningRuntimeInstruction({
+  candidateContext = '',
+  roleContext = '',
+  basePrompt = '',
+} = {}) {
+  const contextLines = [];
+  if (candidateContext) contextLines.push(`Candidate context: ${candidateContext}`);
+  if (roleContext) contextLines.push(`Role context: ${roleContext}`);
+  const contextBlock = contextLines.length ? `\n\nKnown context:\n${contextLines.join('\n')}` : '';
+
+  const prompt = firstNonEmptyText(basePrompt) || getDefaultRealtimeScreeningPrompt();
+  return `${prompt}${contextBlock}`;
 }
 
 async function createJoinToken({ roomName, identity, name }) {
@@ -513,11 +524,27 @@ async function createAgentSession(
 ) {
   const selectedAgentType = normalizeAgentType(agentType);
   const livekitUrl = normalizeLiveKitUrl(process.env.LIVEKIT_URL);
-  const identity = botIdentityForRoom(roomName, selectedAgentType);
-  const selectedBotName =
-    selectedAgentType === AGENT_TYPE_REALTIME_SCREENING
-      ? String(process.env.BOT_NAME_REALTIME_SCREENING || 'Bristlecone Realtime Screening Agent').trim()
-      : BOT_NAME;
+  const persistedPromptTemplates = await loadPersistedPromptTemplates();
+  const agent = createLivekitAgent({
+    roomName,
+    agentType: selectedAgentType,
+    persistedPromptTemplates,
+    deps: {
+      AGENT_TYPE_CLASSIC,
+      AGENT_TYPE_REALTIME_SCREENING,
+      BOT_NAME,
+      INTERVIEW_MODE,
+      SCREENING_MAX_MINUTES,
+      normalizeAgentType,
+      botIdentityForRoom,
+      isBotIdentity,
+      firstNonEmptyText,
+      buildInterviewRuntimeInstruction,
+      buildRealtimeScreeningRuntimeInstruction,
+    },
+  });
+  const identity = agent.identity;
+  const selectedBotName = agent.botName;
   const token = await createJoinToken({ roomName, identity, name: selectedBotName });
 
   const room = new Room();
@@ -525,14 +552,18 @@ async function createAgentSession(
   let stopped = false;
   let idleTimer = null;
   let emptyRoomStopTimer = null;
-  let kickoffSent = false;
   let interviewStarted = false;
   let candidateEverJoined = false;
   let interviewStartedAt = '';
   let finalReportPublished = false;
   let interviewId = '';
-  let screeningHardStopTimer = null;
   const transcript = [];
+
+  const state = {
+    kickoffSent: false,
+    candidateEverJoined: false,
+    screeningHardStopTimer: null,
+  };
 
   room.on(RoomEvent.ParticipantConnected, (participant) => {
     console.log(`[room:${roomName}] participant connected: ${participant.identity}`);
@@ -544,25 +575,18 @@ async function createAgentSession(
       clearTimeout(emptyRoomStopTimer);
       emptyRoomStopTimer = null;
     }
-    if (screeningHardStopTimer) {
-      clearTimeout(screeningHardStopTimer);
-      screeningHardStopTimer = null;
+    if (state.screeningHardStopTimer) {
+      clearTimeout(state.screeningHardStopTimer);
+      state.screeningHardStopTimer = null;
     }
-    if (!isBotIdentity(participant.identity) && INTERVIEW_MODE && !kickoffSent) {
-      kickoffSent = true;
-      queueUserTurn('__bootstrap_interview_start__', 'agent_bootstrap');
-    }
-    if (!isBotIdentity(participant.identity)) {
-      candidateEverJoined = true;
-      ensureInterviewStarted().catch(() => undefined);
-      if (selectedAgentType === AGENT_TYPE_REALTIME_SCREENING && !screeningHardStopTimer) {
-        screeningHardStopTimer = setTimeout(() => {
-          stop('screening_time_limit').catch((err) => {
-            console.error(`[agent][${roomName}] screening stop failed:`, err);
-          });
-        }, SCREENING_MAX_MINUTES * 60 * 1000);
-      }
-    }
+    agent.onParticipantConnected({
+      participant,
+      state,
+      queueUserTurn,
+      ensureInterviewStarted,
+      stop,
+    });
+    candidateEverJoined = state.candidateEverJoined;
   });
 
   room.on(RoomEvent.ParticipantDisconnected, (participant) => {
@@ -590,19 +614,10 @@ async function createAgentSession(
 
   let audioPump = null;
 
-  const llmModel =
-    selectedAgentType === AGENT_TYPE_REALTIME_SCREENING
-      ? process.env.OPENAI_REALTIME_SCREENING_MODEL || 'gpt-realtime-mini'
-      : process.env.OPENAI_MODEL || 'gpt-4o-mini';
-  const llmFallbackModel =
-    selectedAgentType === AGENT_TYPE_REALTIME_SCREENING
-      ? process.env.OPENAI_REALTIME_SCREENING_FALLBACK_MODEL || 'gpt-4o-mini'
-      : '';
-
   const llmService = new LLMService({
     apiKey: process.env.OPENAI_API_KEY,
-    model: llmModel,
-    fallbackModel: llmFallbackModel,
+    model: agent.getLlmModel(),
+    fallbackModel: agent.getLlmFallbackModel(),
     systemPrompt: process.env.OPENAI_SYSTEM_PROMPT || undefined,
   });
 
@@ -627,13 +642,10 @@ async function createAgentSession(
     .trim()
     .replace(/\s+/g, ' ')
     .slice(0, 2500);
-  const fallbackRuntimeInstruction = String(
-    process.env.OPENAI_RUNTIME_INSTRUCTION ||
-      'Have a natural spoken conversation. Keep responses brief, clear, and friendly.',
+  const fallbackRuntimeInstruction = firstNonEmptyText(
+    process.env.OPENAI_RUNTIME_INSTRUCTION,
+    'Have a natural spoken conversation. Keep responses brief, clear, and friendly.',
   );
-  const screeningRuntimeInstruction = String(
-    process.env.OPENAI_REALTIME_SCREENING_RUNTIME_INSTRUCTION || '',
-  ).trim();
 
   const activeInputStreams = new Map();
   let assistantState = 'idle'; // idle | thinking | speaking
@@ -824,46 +836,11 @@ async function createAgentSession(
       return buildFallbackAssessment(stopReason);
     }
 
-    const prompt = [
-      'Generate a structured interview assessment report for technical hiring as strict JSON only.',
-      'Be evidence-based, concise, and decision-ready.',
-      'Do not invent facts. If evidence is limited, state explicit limitations.',
-      `Stop reason: ${stopReason}`,
-      `Candidate turns (${candidateTurns.length}): ${JSON.stringify(candidateTurns)}`,
-      `Assistant turns (${assistantTurns.length}): ${JSON.stringify(assistantTurns)}`,
-      'Return schema:',
-      '{',
-      '  "summaryFeedback": "string <= 260 chars",',
-      '  "detailedFeedback": "string with strengths and risks <= 2000 chars",',
-      '  "recommendation": "strong_hire|hire|hold|no_hire",',
-      '  "interviewScore": number 0-100,',
-      '  "rubricScore": number 0-10,',
-      '  "nextSteps": "string <= 500 chars",',
-      '  "report": {',
-      '    "executiveSummary": "string <= 500 chars",',
-      '    "overallSignal": "strong|moderate|weak",',
-      '    "recommendationDecision": "strong_hire|hire|lean_hire|lean_no|no_hire",',
-      '    "confidence": "high|medium|low",',
-      '    "rationale": ["string", "..."],',
-      '    "scoreImplication": "string <= 300 chars",',
-      '    "calibrationNote": "string <= 200 chars",',
-      '    "competencies": [',
-      '      {',
-      '        "name": "string",',
-      '        "score": number 1-5,',
-      '        "evidence": "string",',
-      '        "strengths": ["string", "..."],',
-      '        "concerns": ["string", "..."]',
-      '      }',
-      '    ],',
-      '    "strengths": ["string", "..."],',
-      '    "risks": ["string", "..."],',
-      '    "followUpQuestions": ["string", "..."],',
-      '    "nextSteps": ["string", "..."],',
-      '    "evidenceLimitations": "string"',
-      '  }',
-      '}',
-    ].join('\n');
+    const prompt = buildEvaluationReportPrompt({
+      stopReason,
+      candidateTurns,
+      assistantTurns,
+    });
 
     try {
       const raw = await llmService.callJson(prompt, {
@@ -1028,10 +1005,10 @@ async function createAgentSession(
         ? 'Start the interview now with a warm intro, set expectations, and ask for consent to begin.'
         : trimmed;
     const runtimeInstruction = INTERVIEW_MODE
-      ? selectedAgentType === AGENT_TYPE_REALTIME_SCREENING
-        ? screeningRuntimeInstruction ||
-          buildRealtimeScreeningRuntimeInstruction({ candidateContext, roleContext })
-        : buildInterviewRuntimeInstruction({ candidateContext, roleContext })
+      ? agent.buildRuntimeInstruction({
+          candidateContext,
+          roleContext,
+        })
       : fallbackRuntimeInstruction;
 
     if (sourceIdentity !== 'agent_bootstrap') {
@@ -1235,6 +1212,10 @@ async function createAgentSession(
     if (emptyRoomStopTimer) {
       clearTimeout(emptyRoomStopTimer);
       emptyRoomStopTimer = null;
+    }
+    if (state.screeningHardStopTimer) {
+      clearTimeout(state.screeningHardStopTimer);
+      state.screeningHardStopTimer = null;
     }
     if (rl) {
       rl.close();

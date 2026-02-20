@@ -151,11 +151,35 @@
   gap: 0.6rem;
 }
 
+.formField {
+  display: grid;
+  gap: 0.28rem;
+}
+
+.formFieldLabel {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #2f4756;
+}
+
 .fileLabel {
   display: grid;
   gap: 0.35rem;
   font-size: 0.9rem;
   color: #2f4756;
+}
+
+.settingsTextArea {
+  width: 100%;
+  min-height: 180px;
+  resize: vertical;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid #c9d7df;
+  border-radius: 0.65rem;
+  background: #f9fcfe;
+  color: #243a47;
+  font-size: 0.92rem;
+  line-height: 1.45;
 }
 
 .errorText {

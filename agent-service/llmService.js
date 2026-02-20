@@ -1,7 +1,7 @@
 const OpenAI = require('openai');
+const { getDefaultLlmSystemPrompt } = require('./promptTemplates');
 
-const DEFAULT_SYSTEM_PROMPT =
-  'You are a concise, natural-sounding AI assistant in a live video meeting. Keep responses short and conversational. Avoid markdown, lists, or emojis.';
+const DEFAULT_SYSTEM_PROMPT = getDefaultLlmSystemPrompt();
 
 class LLMService {
   constructor({

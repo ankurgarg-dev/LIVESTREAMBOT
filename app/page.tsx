@@ -18,8 +18,13 @@ import styles from '../styles/Home.module.css';
 
 type Recommendation = 'strong_hire' | 'hire' | 'hold' | 'no_hire' | '';
 type AgentType = 'classic' | 'realtime_screening';
-type MainTab = 'dashboard' | 'positions' | 'interviews';
+type MainTab = 'dashboard' | 'positions' | 'interviews' | 'settings';
 type PositionDetailsTab = 'job' | 'plan' | 'candidates' | 'interviews';
+type AgentPromptSettings = {
+  classicPrompt: string;
+  realtimePrompt: string;
+  updatedAt?: string;
+};
 
 type InterviewAssetMeta = {
   originalName: string;
@@ -115,7 +120,7 @@ function toListInput(value: string[]): string {
 }
 
 function normalizeTab(value: string | null): MainTab {
-  if (value === 'positions' || value === 'interviews') return value;
+  if (value === 'positions' || value === 'interviews' || value === 'settings') return value;
   return 'dashboard';
 }
 
@@ -191,6 +196,10 @@ export default function Page() {
   const [selectedOutcomeId, setSelectedOutcomeId] = useState('');
   const [setupForm, setSetupForm] = useState<SetupFormState>(() => buildDefaultSetup(defaultAgentRoom));
   const [reportDraft, setReportDraft] = useState<Record<string, string>>({});
+  const [agentPromptSettings, setAgentPromptSettings] = useState<AgentPromptSettings>({
+    classicPrompt: '',
+    realtimePrompt: '',
+  });
 
   const selectedOutcome = useMemo(
     () => interviews.find((item) => item.id === selectedOutcomeId),
@@ -247,9 +256,10 @@ export default function Page() {
     setLoading(true);
     setError('');
     try {
-      const [interviewResult, positionResult] = await Promise.allSettled([
+      const [interviewResult, positionResult, settingsResult] = await Promise.allSettled([
         fetchJsonWithTimeout('/api/interviews'),
         fetchJsonWithTimeout('/api/positions'),
+        fetchJsonWithTimeout('/api/agent-settings'),
       ]);
 
       let nextInterviews: InterviewRecord[] = [];
@@ -276,6 +286,21 @@ export default function Page() {
         }
       } else {
         errors.push('Positions request timed out or failed');
+      }
+
+      if (settingsResult.status === 'fulfilled') {
+        const { response, json } = settingsResult.value;
+        if (response.ok && json?.ok !== false && json?.settings) {
+          setAgentPromptSettings({
+            classicPrompt: String(json.settings.classicPrompt || ''),
+            realtimePrompt: String(json.settings.realtimePrompt || ''),
+            updatedAt: String(json.settings.updatedAt || ''),
+          });
+        } else {
+          errors.push(json?.error || 'Failed to load agent settings');
+        }
+      } else {
+        errors.push('Agent settings request timed out or failed');
       }
 
       setInterviews(nextInterviews);
@@ -537,6 +562,36 @@ export default function Page() {
     }
   };
 
+  const saveAgentPromptSettings = async () => {
+    setSaving(true);
+    setError('');
+    setSuccess('');
+    try {
+      const response = await fetch('/api/agent-settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          classicPrompt: agentPromptSettings.classicPrompt,
+          realtimePrompt: agentPromptSettings.realtimePrompt,
+        }),
+      });
+      const json = await response.json();
+      if (!response.ok || !json?.settings) {
+        throw new Error(json?.error || 'Failed to save agent settings');
+      }
+      setAgentPromptSettings({
+        classicPrompt: String(json.settings.classicPrompt || ''),
+        realtimePrompt: String(json.settings.realtimePrompt || ''),
+        updatedAt: String(json.settings.updatedAt || ''),
+      });
+      setSuccess('Agent prompt settings updated. New interviews will use these defaults.');
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Failed to save agent settings');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <>
       <main className={styles.main} data-lk-theme="default">
@@ -568,6 +623,9 @@ export default function Page() {
             </button>
             <button type="button" className="lk-button" aria-pressed={activeTab === 'interviews'} onClick={() => switchTab('interviews')}>
               Interviews
+            </button>
+            <button type="button" className="lk-button" aria-pressed={activeTab === 'settings'} onClick={() => switchTab('settings')}>
+              Settings
             </button>
           </div>
 
@@ -736,82 +794,115 @@ export default function Page() {
             <div className={styles.tabContent}>
               <h3 style={{ margin: 0 }}>{editingSetupId ? 'Edit Interview Setup' : 'Interview Room Setup'}</h3>
               <form onSubmit={handleSetupSubmit} className={styles.formGrid}>
-                <input
-                  value={setupForm.candidateName}
-                  onChange={(e) => setSetupForm((prev) => ({ ...prev, candidateName: e.target.value }))}
-                  placeholder="Candidate Name*"
-                  required
-                />
-                <input
-                  value={setupForm.candidateEmail}
-                  onChange={(e) => setSetupForm((prev) => ({ ...prev, candidateEmail: e.target.value }))}
-                  type="email"
-                  placeholder="Candidate Email*"
-                  required
-                />
-                <input
-                  value={setupForm.interviewerName}
-                  onChange={(e) => setSetupForm((prev) => ({ ...prev, interviewerName: e.target.value }))}
-                  placeholder="Interviewer Name*"
-                  required
-                />
-                <input
-                  value={setupForm.interviewerEmail}
-                  onChange={(e) => setSetupForm((prev) => ({ ...prev, interviewerEmail: e.target.value }))}
-                  type="email"
-                  placeholder="Interviewer Email"
-                />
+                <label className={styles.formField}>
+                  <span className={styles.formFieldLabel}>Candidate Name*</span>
+                  <input
+                    value={setupForm.candidateName}
+                    onChange={(e) => setSetupForm((prev) => ({ ...prev, candidateName: e.target.value }))}
+                    placeholder="Candidate Name"
+                    required
+                  />
+                </label>
+                <label className={styles.formField}>
+                  <span className={styles.formFieldLabel}>Candidate Email*</span>
+                  <input
+                    value={setupForm.candidateEmail}
+                    onChange={(e) => setSetupForm((prev) => ({ ...prev, candidateEmail: e.target.value }))}
+                    type="email"
+                    placeholder="Candidate Email"
+                    required
+                  />
+                </label>
+                <label className={styles.formField}>
+                  <span className={styles.formFieldLabel}>Interviewer Name*</span>
+                  <input
+                    value={setupForm.interviewerName}
+                    onChange={(e) => setSetupForm((prev) => ({ ...prev, interviewerName: e.target.value }))}
+                    placeholder="Interviewer Name"
+                    required
+                  />
+                </label>
+                <label className={styles.formField}>
+                  <span className={styles.formFieldLabel}>Interviewer Email</span>
+                  <input
+                    value={setupForm.interviewerEmail}
+                    onChange={(e) => setSetupForm((prev) => ({ ...prev, interviewerEmail: e.target.value }))}
+                    type="email"
+                    placeholder="Interviewer Email"
+                  />
+                </label>
 
-                <select value={selectedPositionId} onChange={(e) => setSelectedPositionId(e.target.value)} required>
-                  <option value="">Select Open Position*</option>
-                  {positions.map((position) => (
-                    <option key={position.position_id} value={position.position_id}>
-                      {position.role_title} ({position.role_family}/{position.level})
-                    </option>
-                  ))}
-                </select>
+                <label className={styles.formField}>
+                  <span className={styles.formFieldLabel}>Open Position*</span>
+                  <select value={selectedPositionId} onChange={(e) => setSelectedPositionId(e.target.value)} required>
+                    <option value="">Select Open Position</option>
+                    {positions.map((position) => (
+                      <option key={position.position_id} value={position.position_id}>
+                        {position.role_title} ({position.role_family}/{position.level})
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
-                <input
-                  value={setupForm.jobDepartment}
-                  onChange={(e) => setSetupForm((prev) => ({ ...prev, jobDepartment: e.target.value }))}
-                  placeholder="Department / Function"
-                />
-                <input
-                  type="date"
-                  value={setupForm.scheduledDate}
-                  onChange={(e) => setSetupForm((prev) => ({ ...prev, scheduledDate: e.target.value }))}
-                  required
-                />
-                <input
-                  type="time"
-                  step={60}
-                  value={setupForm.scheduledTime}
-                  onChange={(e) => setSetupForm((prev) => ({ ...prev, scheduledTime: e.target.value }))}
-                  required
-                />
-                <input
-                  type="text"
-                  value={setupForm.timezone}
-                  onChange={(e) => setSetupForm((prev) => ({ ...prev, timezone: e.target.value }))}
-                  placeholder="Timezone"
-                  required
-                />
-                <input
-                  type="text"
-                  value={setupForm.roomName}
-                  onChange={(e) => setSetupForm((prev) => ({ ...prev, roomName: e.target.value }))}
-                  placeholder="Room Name"
-                  required
-                />
-                <select
-                  value={setupForm.agentType}
-                  onChange={(e) =>
-                    setSetupForm((prev) => ({ ...prev, agentType: e.target.value as AgentType }))
-                  }
-                >
-                  <option value="classic">Classic Interview Agent</option>
-                  <option value="realtime_screening">Realtime Screening Agent (10 min)</option>
-                </select>
+                <label className={styles.formField}>
+                  <span className={styles.formFieldLabel}>Department / Function</span>
+                  <input
+                    value={setupForm.jobDepartment}
+                    onChange={(e) => setSetupForm((prev) => ({ ...prev, jobDepartment: e.target.value }))}
+                    placeholder="Department / Function"
+                  />
+                </label>
+                <label className={styles.formField}>
+                  <span className={styles.formFieldLabel}>Scheduled Date*</span>
+                  <input
+                    type="date"
+                    value={setupForm.scheduledDate}
+                    onChange={(e) => setSetupForm((prev) => ({ ...prev, scheduledDate: e.target.value }))}
+                    required
+                  />
+                </label>
+                <label className={styles.formField}>
+                  <span className={styles.formFieldLabel}>Scheduled Time*</span>
+                  <input
+                    type="time"
+                    step={60}
+                    value={setupForm.scheduledTime}
+                    onChange={(e) => setSetupForm((prev) => ({ ...prev, scheduledTime: e.target.value }))}
+                    required
+                  />
+                </label>
+                <label className={styles.formField}>
+                  <span className={styles.formFieldLabel}>Timezone*</span>
+                  <input
+                    type="text"
+                    value={setupForm.timezone}
+                    onChange={(e) => setSetupForm((prev) => ({ ...prev, timezone: e.target.value }))}
+                    placeholder="Timezone"
+                    required
+                  />
+                </label>
+                <label className={styles.formField}>
+                  <span className={styles.formFieldLabel}>Room Name*</span>
+                  <input
+                    type="text"
+                    value={setupForm.roomName}
+                    onChange={(e) => setSetupForm((prev) => ({ ...prev, roomName: e.target.value }))}
+                    placeholder="Room Name"
+                    required
+                  />
+                </label>
+                <label className={styles.formField}>
+                  <span className={styles.formFieldLabel}>Interview Agent</span>
+                  <select
+                    value={setupForm.agentType}
+                    onChange={(e) =>
+                      setSetupForm((prev) => ({ ...prev, agentType: e.target.value as AgentType }))
+                    }
+                  >
+                    <option value="classic">Classic Interview Agent</option>
+                    <option value="realtime_screening">Realtime Screening Agent (10 min)</option>
+                  </select>
+                </label>
 
                 {positionDraft ? (
                   <>
@@ -1199,6 +1290,50 @@ export default function Page() {
                   </div>
                 </div>
               ) : null}
+            </div>
+          ) : null}
+
+          {!loading && activeTab === 'settings' ? (
+            <div className={styles.tabContent}>
+              <h3 style={{ margin: 0 }}>Agent Prompt Settings</h3>
+              <p className={styles.interviewMeta}>
+                Edit the base runtime context for each agent. Candidate CV and role context are still appended automatically at runtime.
+              </p>
+              <label className={styles.formField}>
+                <span className={styles.formFieldLabel}>Classic Interview Agent Prompt</span>
+                <textarea
+                  className={styles.settingsTextArea}
+                  value={agentPromptSettings.classicPrompt}
+                  onChange={(e) =>
+                    setAgentPromptSettings((prev) => ({ ...prev, classicPrompt: e.target.value }))
+                  }
+                  placeholder="Enter base prompt for classic agent"
+                />
+              </label>
+              <label className={styles.formField}>
+                <span className={styles.formFieldLabel}>Realtime Screening Agent Prompt</span>
+                <textarea
+                  className={styles.settingsTextArea}
+                  value={agentPromptSettings.realtimePrompt}
+                  onChange={(e) =>
+                    setAgentPromptSettings((prev) => ({ ...prev, realtimePrompt: e.target.value }))
+                  }
+                  placeholder="Enter base prompt for realtime screening agent"
+                />
+              </label>
+              <div className={styles.cardButtons}>
+                <button type="button" className="lk-button" onClick={saveAgentPromptSettings} disabled={saving}>
+                  {saving ? 'Saving...' : 'Save Settings'}
+                </button>
+                <button type="button" className="lk-button" onClick={() => loadData()} disabled={saving}>
+                  Reload
+                </button>
+              </div>
+              <p className={styles.interviewMeta}>
+                {agentPromptSettings.updatedAt
+                  ? `Last updated: ${formatDate(agentPromptSettings.updatedAt)}`
+                  : 'Using default prompt settings.'}
+              </p>
             </div>
           ) : null}
         </div>
