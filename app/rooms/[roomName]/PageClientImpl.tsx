@@ -200,6 +200,10 @@ function VideoConferenceComponent(props: {
     codec: VideoCodec;
   };
 }) {
+  const contextPublishedRef = React.useRef(false);
+  React.useEffect(() => {
+    contextPublishedRef.current = false;
+  }, [props.connectionDetails.roomName, props.connectionDetails.participantToken]);
   const keyProvider = new ExternalE2EEKeyProvider();
   const { worker, e2eePassphrase } = useSetupE2EE();
   const e2eeEnabled = !!(e2eePassphrase && worker);
@@ -266,6 +270,45 @@ function VideoConferenceComponent(props: {
     };
   }, []);
 
+  const publishInterviewContextBestEffort = React.useCallback(async () => {
+    if (contextPublishedRef.current) return;
+    const payload = props.connectionDetails.interviewContext;
+    const cv = String(payload?.candidateContext || '').trim();
+    const role = String(payload?.roleContext || '').trim();
+    if (!cv && !role) return;
+
+    const contextMessage = {
+      interviewId: payload?.interviewId || '',
+      agentType: payload?.agentType || 'classic',
+      cv,
+      role,
+      context: { cv, role },
+    };
+    const data = new TextEncoder().encode(JSON.stringify(contextMessage));
+
+    const tryPublish = async () => {
+      await room.localParticipant.publishData(data, { reliable: true });
+      contextPublishedRef.current = true;
+    };
+
+    try {
+      await tryPublish();
+      return;
+    } catch {
+      // Retry to handle initial race where data channel is not ready yet.
+    }
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      try {
+        await tryPublish();
+        return;
+      } catch {
+        // continue retries
+      }
+    }
+  }, [props.connectionDetails.interviewContext, room]);
+
   const startRecordingBestEffort = React.useCallback(async () => {
     if (room.isE2EEEnabled) return;
     try {
@@ -307,13 +350,31 @@ function VideoConferenceComponent(props: {
     },
     [room],
   );
+  const router = useRouter();
+  const handleOnLeave = React.useCallback(() => router.push('/'), [router]);
+  const handleError = React.useCallback((error: Error) => {
+    console.error(error);
+    alert(`Encountered an unexpected error, check the console logs for details: ${error.message}`);
+  }, []);
+  const handleEncryptionError = React.useCallback((error: Error) => {
+    console.error(error);
+    alert(
+      `Encountered an unexpected encryption error, check the console logs for details: ${error.message}`,
+    );
+  }, []);
 
   React.useEffect(() => {
     room.on(RoomEvent.Disconnected, handleOnLeave);
     room.on(RoomEvent.EncryptionError, handleEncryptionError);
     room.on(RoomEvent.MediaDevicesError, handleError);
+    const handleConnected = () => {
+      publishInterviewContextBestEffort().catch((error) =>
+        console.error('[room] interview context publish failed:', error),
+      );
+    };
 
     if (e2eeSetupComplete) {
+      room.on(RoomEvent.Connected, handleConnected);
       room
         .connect(
           props.connectionDetails.serverUrl,
@@ -333,28 +394,29 @@ function VideoConferenceComponent(props: {
           handleError(error);
         });
       }
+      if (room.state === ConnectionState.Connected) {
+        handleConnected();
+      }
     }
     return () => {
+      room.off(RoomEvent.Connected, handleConnected);
       room.off(RoomEvent.Disconnected, handleOnLeave);
       room.off(RoomEvent.EncryptionError, handleEncryptionError);
       room.off(RoomEvent.MediaDevicesError, handleError);
     };
-  }, [e2eeSetupComplete, room, props.connectionDetails, props.userChoices]);
+  }, [
+    connectOptions,
+    e2eeSetupComplete,
+    handleEncryptionError,
+    handleError,
+    handleOnLeave,
+    props.connectionDetails,
+    props.userChoices,
+    publishInterviewContextBestEffort,
+    room,
+  ]);
 
   const lowPowerMode = useLowCPUOptimizer(room);
-
-  const router = useRouter();
-  const handleOnLeave = React.useCallback(() => router.push('/'), [router]);
-  const handleError = React.useCallback((error: Error) => {
-    console.error(error);
-    alert(`Encountered an unexpected error, check the console logs for details: ${error.message}`);
-  }, []);
-  const handleEncryptionError = React.useCallback((error: Error) => {
-    console.error(error);
-    alert(
-      `Encountered an unexpected encryption error, check the console logs for details: ${error.message}`,
-    );
-  }, []);
 
   React.useEffect(() => {
     if (!AUTO_RECORD_INTERVIEW) return;

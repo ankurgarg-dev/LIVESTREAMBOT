@@ -65,6 +65,14 @@ export async function GET(request: NextRequest) {
       roomName: roomName,
       participantToken: participantToken,
       participantName: participantName,
+      interviewContext: latestInterview
+        ? {
+            interviewId: latestInterview.id,
+            agentType,
+            candidateContext: latestInterview.candidateContext || '',
+            roleContext: latestInterview.roleContext || '',
+          }
+        : undefined,
     };
     return new NextResponse(JSON.stringify(data), {
       headers: {

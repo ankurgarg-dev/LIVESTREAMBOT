@@ -25,4 +25,10 @@ export type ConnectionDetails = {
   roomName: string;
   participantName: string;
   participantToken: string;
+  interviewContext?: {
+    interviewId?: string;
+    agentType?: 'classic' | 'realtime_screening';
+    candidateContext?: string;
+    roleContext?: string;
+  };
 };

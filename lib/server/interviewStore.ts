@@ -74,6 +74,8 @@ export type InterviewRecord = {
   timezone: string;
   notes: string;
   agentType: InterviewAgentType;
+  candidateContext?: string;
+  roleContext?: string;
   positionId?: string;
   positionSnapshot?: InterviewPositionSnapshot;
   cv?: InterviewAssetMeta;
@@ -107,6 +109,8 @@ export type InterviewCreateInput = {
   timezone: string;
   notes: string;
   agentType?: InterviewAgentType;
+  candidateContext?: string;
+  roleContext?: string;
   positionId?: string;
   positionSnapshot?: InterviewPositionSnapshot;
 };
@@ -128,6 +132,8 @@ export type InterviewUpdateInput = Partial<
     | 'agentType'
     | 'transcriptText'
     | 'assessmentReport'
+    | 'candidateContext'
+    | 'roleContext'
   >
 >;
 
@@ -215,6 +221,8 @@ export async function createInterview(input: InterviewCreateInput): Promise<Inte
     timezone: input.timezone,
     notes: input.notes,
     agentType: input.agentType === 'realtime_screening' ? 'realtime_screening' : 'classic',
+    candidateContext: input.candidateContext,
+    roleContext: input.roleContext,
     positionId: input.positionId,
     positionSnapshot: input.positionSnapshot,
     createdAt: now,

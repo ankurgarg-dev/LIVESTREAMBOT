@@ -1,11 +1,13 @@
 import {
   attachInterviewAsset,
   createInterview,
+  updateInterview,
   type InterviewAgentType,
   type InterviewPositionSnapshot,
   listInterviews,
   type InterviewCreateInput,
 } from '@/lib/server/interviewStore';
+import { buildRoleContextFromPosition, extractCandidateContextFromUpload } from '@/lib/server/cvContext';
 import { RoomServiceClient } from 'livekit-server-sdk';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -108,7 +110,14 @@ export async function POST(req: NextRequest) {
     const positionId = String(form.get('positionId') ?? '').trim() || undefined;
     const agentType = normalizeAgentType(form.get('agentType'));
     const fallbackJobTitle = positionSnapshot?.role_title || '';
+    const fallbackJobDepartment = String(form.get('jobDepartment') ?? '').trim();
     const durationCandidate = Number(form.get('durationMinutes') ?? positionSnapshot?.duration_minutes ?? 0);
+    const cvFile = form.get('cv');
+    const jdFile = form.get('jd');
+    const candidateContext = isUploadedFile(cvFile)
+      ? await extractCandidateContextFromUpload(cvFile).catch(() => '')
+      : '';
+    const roleContext = buildRoleContextFromPosition(positionSnapshot, fallbackJobTitle, fallbackJobDepartment);
 
     const input: InterviewCreateInput = {
       roomName: normalizeRoomName(requestedRoomName || defaultRoomName),
@@ -123,6 +132,8 @@ export async function POST(req: NextRequest) {
       timezone: String(form.get('timezone') ?? Intl.DateTimeFormat().resolvedOptions().timeZone).trim(),
       notes: String(form.get('notes') ?? '').trim(),
       agentType,
+      candidateContext,
+      roleContext,
       positionId,
       positionSnapshot,
     };
@@ -136,14 +147,18 @@ export async function POST(req: NextRequest) {
     }
 
     let interview = await createInterview(input);
-    const cvFile = form.get('cv');
-    const jdFile = form.get('jd');
 
     if (isUploadedFile(cvFile) && cvFile.size > 0) {
       interview = await attachInterviewAsset(interview.id, 'cv', cvFile);
     }
     if (isUploadedFile(jdFile) && jdFile.size > 0) {
       interview = await attachInterviewAsset(interview.id, 'jd', jdFile);
+    }
+    if ((candidateContext || roleContext) && interview.id) {
+      interview = await updateInterview(interview.id, {
+        candidateContext: candidateContext || undefined,
+        roleContext: roleContext || undefined,
+      });
     }
 
     return NextResponse.json({ ok: true, interview }, { status: 201 });
