@@ -1,6 +1,6 @@
 import { applyDeterministicMapping, deepDiff } from '@/lib/position/logic';
 import type { PositionConfigCore } from '@/lib/position/types';
-import { getPosition, updatePosition } from '@/lib/server/positionStore';
+import { deletePosition, getPosition, updatePosition } from '@/lib/server/positionStore';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function GET(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -41,6 +41,20 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
     return NextResponse.json({ ok: true, position: updated });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to update position';
+    return NextResponse.json({ ok: false, error: message }, { status: 400 });
+  }
+}
+
+export async function DELETE(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
+  try {
+    const { id } = await context.params;
+    const deleted = await deletePosition(id);
+    if (!deleted) {
+      return NextResponse.json({ ok: false, error: 'Position not found' }, { status: 404 });
+    }
+    return NextResponse.json({ ok: true, deletedId: id });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to delete position';
     return NextResponse.json({ ok: false, error: message }, { status: 400 });
   }
 }

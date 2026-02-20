@@ -254,6 +254,16 @@
   text-decoration: underline;
 }
 
+.assetDisabledButton {
+  border: none;
+  background: transparent;
+  color: #96a8b1;
+  text-decoration: none;
+  cursor: not-allowed;
+  padding: 0;
+  font: inherit;
+}
+
 @media (max-width: 1020px) {
   .heroCard {
     grid-template-columns: 1fr;

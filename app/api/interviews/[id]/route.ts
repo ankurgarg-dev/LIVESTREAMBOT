@@ -1,4 +1,4 @@
-import { getInterview, updateInterview } from '@/lib/server/interviewStore';
+import { deleteInterview, getInterview, updateInterview } from '@/lib/server/interviewStore';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function GET(
@@ -31,5 +31,22 @@ export async function PATCH(
     const message = error instanceof Error ? error.message : 'Failed to update interview';
     const status = message.includes('not found') ? 404 : 400;
     return NextResponse.json({ error: message }, { status });
+  }
+}
+
+export async function DELETE(
+  _req: NextRequest,
+  ctx: { params: Promise<{ id: string }> },
+) {
+  try {
+    const { id } = await ctx.params;
+    const deleted = await deleteInterview(id);
+    if (!deleted) {
+      return NextResponse.json({ error: 'Interview not found' }, { status: 404 });
+    }
+    return NextResponse.json({ ok: true, deletedId: id });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to delete interview';
+    return NextResponse.json({ error: message }, { status: 400 });
   }
 }

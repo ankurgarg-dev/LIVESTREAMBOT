@@ -46,6 +46,7 @@ export function PageClientImpl(props: {
   autoJoin?: boolean;
   participantName?: string;
   agentType?: 'classic' | 'realtime_screening';
+  joinRole?: 'candidate' | 'moderator';
 }) {
   const router = useRouter();
   const [roomDraft, setRoomDraft] = React.useState(props.roomName);
@@ -54,6 +55,7 @@ export function PageClientImpl(props: {
   const [preJoinChoices, setPreJoinChoices] = React.useState<LocalUserChoices | undefined>(
     undefined,
   );
+  const [joinRole, setJoinRole] = React.useState<'candidate' | 'moderator'>(props.joinRole || 'candidate');
   const preJoinDefaults = React.useMemo(() => {
     return {
       username: '',
@@ -70,6 +72,7 @@ export function PageClientImpl(props: {
     const url = new URL(CONN_DETAILS_ENDPOINT, window.location.origin);
     url.searchParams.append('roomName', props.roomName);
     url.searchParams.append('participantName', values.username);
+    url.searchParams.append('metadata', JSON.stringify({ role: joinRole }));
     if (props.region) {
       url.searchParams.append('region', props.region);
     }
@@ -82,7 +85,7 @@ export function PageClientImpl(props: {
       throw new Error(connectionDetailsData?.error || connectionDetailsData?.message || 'Failed to join room');
     }
     setConnectionDetails(connectionDetailsData);
-  }, [props.agentType, props.region, props.roomName]);
+  }, [joinRole, props.agentType, props.region, props.roomName]);
   const handlePreJoinSubmit = React.useCallback(
     async (values: LocalUserChoices) => {
       setAutoJoinError('');
@@ -146,7 +149,7 @@ export function PageClientImpl(props: {
                 <div
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: '1fr auto auto',
+                    gridTemplateColumns: '1fr auto auto auto',
                     gap: '0.5rem',
                     marginBottom: '0.6rem',
                     alignItems: 'center',
@@ -168,6 +171,14 @@ export function PageClientImpl(props: {
                   <button className="lk-button" onClick={handleSwitchRoom}>
                     Switch Room
                   </button>
+                  <select
+                    value={joinRole}
+                    onChange={(e) => setJoinRole(e.target.value === 'moderator' ? 'moderator' : 'candidate')}
+                    aria-label="Join role"
+                  >
+                    <option value="candidate">Join as Candidate</option>
+                    <option value="moderator">Join as Moderator</option>
+                  </select>
                   <button className="lk-button" onClick={() => router.push('/')}>
                     Cancel
                   </button>
@@ -186,6 +197,7 @@ export function PageClientImpl(props: {
           connectionDetails={connectionDetails}
           userChoices={preJoinChoices}
           options={{ codec: props.codec, hq: props.hq }}
+          joinRole={joinRole}
         />
       )}
     </main>
@@ -199,6 +211,7 @@ function VideoConferenceComponent(props: {
     hq: boolean;
     codec: VideoCodec;
   };
+  joinRole: 'candidate' | 'moderator';
 }) {
   const contextPublishedRef = React.useRef(false);
   React.useEffect(() => {
@@ -478,6 +491,7 @@ function VideoConferenceComponent(props: {
         <BristleconeVideoConference
           chatMessageFormatter={formatChatMessageLinks}
           SettingsComponent={SHOW_SETTINGS_MENU ? SettingsMenu : undefined}
+          isModerator={props.joinRole === 'moderator'}
         />
         <DebugMode />
         <RecordingIndicator />

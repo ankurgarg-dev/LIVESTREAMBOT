@@ -1,4 +1,5 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
 export const DEFAULT_CLASSIC_AGENT_PROMPT = [
@@ -41,7 +42,8 @@ export type AgentPromptSettings = {
   updatedAt: string;
 };
 
-const baseDir = process.env.INTERVIEW_DATA_DIR ?? path.join('/tmp', 'bristlecone-interviews');
+const baseDir =
+  process.env.INTERVIEW_DATA_DIR ?? path.join(os.homedir(), '.bristlecone-data', 'interviews');
 const settingsPath = path.join(baseDir, 'agent-settings.json');
 
 type AgentPromptSettingsPayload = Partial<AgentPromptSettings>;

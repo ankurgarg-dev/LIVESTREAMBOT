@@ -43,6 +43,7 @@ const RECORDING_ENDPOINT = process.env.NEXT_PUBLIC_LK_RECORD_ENDPOINT ?? '/api/r
 export interface BristleconeVideoConferenceProps extends React.HTMLAttributes<HTMLDivElement> {
   chatMessageFormatter?: MessageFormatter;
   SettingsComponent?: React.ComponentType;
+  isModerator?: boolean;
 }
 
 type AgentOrbVariant = 'classic' | 'realtime_screening';
@@ -57,10 +58,21 @@ function formatDuration(totalSeconds: number): string {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
-function ControlBarRecordingExtras({ showSettings }: { showSettings: boolean }) {
+function ControlBarRecordingExtras({
+  showSettings,
+  isModerator,
+  isInterviewPaused,
+  onTogglePause,
+}: {
+  showSettings: boolean;
+  isModerator: boolean;
+  isInterviewPaused: boolean;
+  onTogglePause: () => Promise<void>;
+}) {
   const room = useRoomContext();
   const isRecording = useIsRecording();
   const [isToggling, setIsToggling] = React.useState(false);
+  const [isPauseBusy, setIsPauseBusy] = React.useState(false);
   const [meetingStartedAt, setMeetingStartedAt] = React.useState<number>(() => Date.now());
   const [meetingElapsedSec, setMeetingElapsedSec] = React.useState(0);
 
@@ -116,6 +128,23 @@ function ControlBarRecordingExtras({ showSettings }: { showSettings: boolean }) 
         >
           {isToggling ? 'Please wait...' : isRecording ? 'Stop Rec' : 'Start Rec'}
         </button>
+        {isModerator ? (
+          <button
+            type="button"
+            className={`lk-button bc-controlbar-pause-toggle ${isInterviewPaused ? 'is-paused' : ''}`}
+            disabled={isPauseBusy}
+            onClick={async () => {
+              setIsPauseBusy(true);
+              try {
+                await onTogglePause();
+              } finally {
+                setIsPauseBusy(false);
+              }
+            }}
+          >
+            {isPauseBusy ? 'Please wait...' : isInterviewPaused ? 'Resume Interview' : 'Pause Interview'}
+          </button>
+        ) : null}
       </div>
     </div>
   );
@@ -174,10 +203,12 @@ function AgentOrbOverlay({
   participant,
   localParticipant,
   variant,
+  paused = false,
 }: {
   participant: Participant;
   localParticipant?: Participant;
   variant: AgentOrbVariant;
+  paused?: boolean;
 }) {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const managerRef = React.useRef<VisualizerManager | null>(null);
@@ -343,16 +374,18 @@ function AgentOrbOverlay({
 
   if (variant === 'realtime_screening') {
     const stateClass =
-      visualState === 'speaking'
-        ? 'is-speaking'
-        : visualState === 'thinking'
-          ? 'is-thinking'
-          : localIsSpeaking
-            ? 'is-listening'
-            : 'is-idle';
+      paused
+        ? 'is-paused'
+        : visualState === 'speaking'
+          ? 'is-speaking'
+          : visualState === 'thinking'
+            ? 'is-thinking'
+            : localIsSpeaking
+              ? 'is-listening'
+              : 'is-idle';
 
     return (
-      <div className="bc-realtime-simple-orb" aria-label="Realtime screening orb">
+      <div className={`bc-realtime-simple-orb ${paused ? 'is-paused' : ''}`} aria-label="Realtime screening orb">
         <div className="bc-agent-orb-badge">Realtime Screening</div>
         <div className={`bc-realtime-core ${stateClass}`} />
         <div className={`bc-realtime-ring r1 ${stateClass}`} />
@@ -364,7 +397,7 @@ function AgentOrbOverlay({
 
   return (
     <div
-      className="bc-agent-orb-shell bc-agent-orb-shell--classic"
+      className={`bc-agent-orb-shell bc-agent-orb-shell--classic ${paused ? 'is-paused' : ''}`}
       aria-label="AI audio visualizer"
     >
       <div ref={containerRef} className="bc-agent-orb-canvas" />
@@ -372,7 +405,7 @@ function AgentOrbOverlay({
   );
 }
 
-function BristleconeParticipantTile() {
+function BristleconeParticipantTile({ paused = false }: { paused?: boolean }) {
   const trackRef = useMaybeTrackRefContext();
   const participant = trackRef?.participant;
   const { localParticipant } = useLocalParticipant();
@@ -400,6 +433,7 @@ function BristleconeParticipantTile() {
           participant={participant}
           localParticipant={localParticipant}
           variant={orbVariant}
+          paused={paused}
         />
       )}
       {micRef ? <AudioTrack trackRef={micRef} /> : null}
@@ -419,8 +453,10 @@ function BristleconeParticipantTile() {
 
 function FloatingAgentOrb({
   trackedParticipantIdentities,
+  paused = false,
 }: {
   trackedParticipantIdentities: Set<string>;
+  paused?: boolean;
 }) {
   const { localParticipant } = useLocalParticipant();
   const remoteParticipants = useRemoteParticipants({
@@ -453,6 +489,7 @@ function FloatingAgentOrb({
         participant={fallbackAgent}
         localParticipant={localParticipant}
         variant={getAgentOrbVariant(fallbackAgent)}
+        paused={paused}
       />
       <div className="bc-agent-floating-label">
         {fallbackAgent.name || fallbackAgent.identity}
@@ -464,6 +501,7 @@ function FloatingAgentOrb({
 export function BristleconeVideoConference({
   chatMessageFormatter,
   SettingsComponent,
+  isModerator = false,
   ...props
 }: BristleconeVideoConferenceProps) {
   const [showChat, setShowChat] = React.useState(false);
@@ -495,6 +533,43 @@ export function BristleconeVideoConference({
     }
     return ids;
   }, [tracks]);
+  const room = useRoomContext();
+  const [isInterviewPaused, setIsInterviewPaused] = React.useState(false);
+
+  React.useEffect(() => {
+    const onDataReceived = (payload: Uint8Array) => {
+      try {
+        const text = new TextDecoder().decode(payload).trim();
+        if (!text.startsWith('{')) return;
+        const parsed = JSON.parse(text);
+        if (parsed?.type === 'agent_control_state') {
+          setIsInterviewPaused(Boolean(parsed?.paused));
+        }
+      } catch {
+        // Ignore non-JSON control payloads.
+      }
+    };
+    room.on(RoomEvent.DataReceived, onDataReceived);
+    return () => {
+      room.off(RoomEvent.DataReceived, onDataReceived);
+    };
+  }, [room]);
+
+  const togglePause = React.useCallback(async () => {
+    if (!isModerator) return;
+    const pausedNext = !isInterviewPaused;
+    const payload = new TextEncoder().encode(
+      JSON.stringify({ type: 'agent_control', action: pausedNext ? 'pause' : 'resume' }),
+    );
+    await room.localParticipant.publishData(payload, { reliable: true });
+
+    const endpoint = pausedNext ? 'stop' : 'start';
+    await fetch(`${RECORDING_ENDPOINT}/${endpoint}?roomName=${encodeURIComponent(room.name)}`, {
+      method: 'POST',
+      keepalive: true,
+    }).catch(() => undefined);
+    setIsInterviewPaused(pausedNext);
+  }, [isInterviewPaused, isModerator, room]);
 
   const layoutContext = useCreateLayoutContext();
   const focusTrack = usePinnedTracks(layoutContext)?.[0];
@@ -513,21 +588,26 @@ export function BristleconeVideoConference({
           {!focusTrack ? (
             <div className="lk-grid-layout-wrapper">
               <GridLayout tracks={tracks}>
-                <BristleconeParticipantTile />
+                <BristleconeParticipantTile paused={isInterviewPaused} />
               </GridLayout>
             </div>
           ) : (
             <div className="lk-focus-layout-wrapper">
               <FocusLayoutContainer>
                 <CarouselLayout tracks={carouselTracks}>
-                  <BristleconeParticipantTile />
+                  <BristleconeParticipantTile paused={isInterviewPaused} />
                 </CarouselLayout>
                 <FocusLayout trackRef={focusTrack} />
               </FocusLayoutContainer>
             </div>
           )}
-          <ControlBarRecordingExtras showSettings={!!SettingsComponent} />
-          <FloatingAgentOrb trackedParticipantIdentities={trackedParticipantIdentities} />
+          <ControlBarRecordingExtras
+            showSettings={!!SettingsComponent}
+            isModerator={isModerator}
+            isInterviewPaused={isInterviewPaused}
+            onTogglePause={togglePause}
+          />
+          <FloatingAgentOrb trackedParticipantIdentities={trackedParticipantIdentities} paused={isInterviewPaused} />
         </div>
 
         <Chat style={{ display: showChat ? 'grid' : 'none' }} messageFormatter={chatMessageFormatter} />

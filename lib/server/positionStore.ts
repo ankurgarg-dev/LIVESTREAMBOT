@@ -1,11 +1,13 @@
 import { randomUUID } from 'crypto';
 import { mkdir, readFile, writeFile } from 'fs/promises';
+import os from 'os';
 import path from 'path';
 import type { PositionConfigCore, PositionConfigRecord } from '@/lib/position/types';
 
 type PositionPayload = { positions: PositionConfigRecord[] };
 
-const baseDir = process.env.POSITION_DATA_DIR ?? path.join('/tmp', 'bristlecone-positions');
+const baseDir =
+  process.env.POSITION_DATA_DIR ?? path.join(os.homedir(), '.bristlecone-data', 'positions');
 const dbPath = path.join(baseDir, 'positions.json');
 
 async function ensureDir() {
@@ -99,4 +101,13 @@ export async function updatePosition(
   payload.positions[index] = next;
   await writePayload(payload);
   return next;
+}
+
+export async function deletePosition(id: string): Promise<boolean> {
+  const payload = await readPayload();
+  const before = payload.positions.length;
+  payload.positions = payload.positions.filter((entry) => entry.position_id !== id);
+  if (payload.positions.length === before) return false;
+  await writePayload(payload);
+  return true;
 }

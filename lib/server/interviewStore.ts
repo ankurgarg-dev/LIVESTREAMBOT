@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { mkdir, readFile, stat, unlink, writeFile } from 'fs/promises';
+import os from 'os';
 import path from 'path';
 
 export type InterviewStatus = 'scheduled' | 'completed' | 'cancelled';
@@ -148,7 +149,8 @@ type InterviewStorePayload = {
   interviews: InterviewRecord[];
 };
 
-const baseDir = process.env.INTERVIEW_DATA_DIR ?? path.join('/tmp', 'bristlecone-interviews');
+const baseDir =
+  process.env.INTERVIEW_DATA_DIR ?? path.join(os.homedir(), '.bristlecone-data', 'interviews');
 const uploadsDir = path.join(baseDir, 'uploads');
 const dbPath = path.join(baseDir, 'interviews.json');
 
@@ -308,4 +310,22 @@ export async function resolveInterviewAsset(
   const filePath = path.join(uploadsDir, meta.storedName);
   await stat(filePath);
   return { filePath, meta };
+}
+
+export async function deleteInterview(id: string): Promise<boolean> {
+  const payload = await readPayload();
+  const index = payload.interviews.findIndex((entry) => entry.id === id);
+  if (index < 0) return false;
+  const target = payload.interviews[index];
+
+  for (const kind of ['cv', 'jd'] as const) {
+    const meta = target[kind];
+    if (!meta?.storedName) continue;
+    const filePath = path.join(uploadsDir, meta.storedName);
+    await unlink(filePath).catch(() => undefined);
+  }
+
+  payload.interviews.splice(index, 1);
+  await writePayload(payload);
+  return true;
 }

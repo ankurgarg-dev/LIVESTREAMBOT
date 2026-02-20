@@ -343,6 +343,12 @@ h2 a {
   color: #ffffff !important;
 }
 
+.bc-controlbar-pause-toggle.is-paused {
+  background: #b6802b !important;
+  border-color: #986a20 !important;
+  color: #fffaf0 !important;
+}
+
 @media (max-width: 900px) {
   .bc-controlbar-row {
     grid-template-columns: 1fr;
@@ -388,6 +394,12 @@ h2 a {
   background:
     radial-gradient(circle at 30% 20%, rgba(83, 186, 205, 0.18), transparent 46%),
     linear-gradient(180deg, #10171f 0%, #121d27 100%);
+}
+
+.bc-agent-orb-shell--classic.is-paused {
+  transform: scale(0.82);
+  opacity: 0.72;
+  filter: saturate(0.52) brightness(0.84);
 }
 
 .bc-agent-orb-shell--realtime {
@@ -512,6 +524,12 @@ h2 a {
     0 0 26px rgba(49, 150, 214, 0.22);
 }
 
+.bc-realtime-simple-orb.is-paused {
+  transform: scale(0.82);
+  opacity: 0.68;
+  filter: saturate(0.5) brightness(0.84);
+}
+
 .bc-realtime-core {
   position: absolute;
   width: 42%;
@@ -581,6 +599,11 @@ h2 a {
 
 .bc-realtime-ring.is-speaking {
   animation: bc-rt-speaking-ring 0.66s ease-out infinite;
+}
+
+.bc-realtime-core.is-paused,
+.bc-realtime-ring.is-paused {
+  animation: none !important;
 }
 
 @keyframes bc-rt-idle-breath {

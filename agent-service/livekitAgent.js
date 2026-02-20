@@ -2,6 +2,7 @@ require('dotenv').config();
 
 const http = require('node:http');
 const fs = require('node:fs/promises');
+const os = require('node:os');
 const path = require('node:path');
 const readline = require('node:readline');
 const OpenAI = require('openai');
@@ -457,7 +458,7 @@ function firstNonEmptyText(...values) {
 }
 
 function getAgentSettingsPath() {
-  const baseDir = process.env.INTERVIEW_DATA_DIR || '/tmp/bristlecone-interviews';
+  const baseDir = process.env.INTERVIEW_DATA_DIR || path.join(os.homedir(), '.bristlecone-data', 'interviews');
   return path.join(baseDir, 'agent-settings.json');
 }
 
@@ -557,6 +558,7 @@ async function createAgentSession(
   let interviewStartedAt = '';
   let finalReportPublished = false;
   let interviewId = '';
+  let isInterviewPaused = false;
   const transcript = [];
 
   const state = {
@@ -567,6 +569,7 @@ async function createAgentSession(
 
   room.on(RoomEvent.ParticipantConnected, (participant) => {
     console.log(`[room:${roomName}] participant connected: ${participant.identity}`);
+    void publishPauseState();
     if (idleTimer) {
       clearTimeout(idleTimer);
       idleTimer = null;
@@ -920,6 +923,7 @@ async function createAgentSession(
   };
 
   const publishFinalReport = async (stopReason) => {
+    if (stopReason !== 'room_empty') return;
     if (finalReportPublished || !candidateEverJoined) return;
     if (!interviewStarted) {
       await ensureInterviewStarted().catch(() => undefined);
@@ -996,9 +1000,36 @@ async function createAgentSession(
     }
   };
 
+  const isModeratorParticipant = (participant) => {
+    try {
+      const meta = String(participant?.metadata || '').trim();
+      if (!meta) return false;
+      const parsed = JSON.parse(meta);
+      return String(parsed?.role || '').trim().toLowerCase() === 'moderator';
+    } catch {
+      return false;
+    }
+  };
+
+  const publishPauseState = async () => {
+    try {
+      const payload = Buffer.from(
+        JSON.stringify({
+          type: 'agent_control_state',
+          paused: isInterviewPaused,
+          ts: nowIso(),
+        }),
+      );
+      await room.localParticipant.publishData(payload, { reliable: true });
+    } catch (err) {
+      console.warn(`[agent][${roomName}] failed to publish pause state:`, err?.message || err);
+    }
+  };
+
   const processUserInput = async (text, sourceIdentity = 'participant', seq = 0) => {
     const trimmed = text.trim();
     if (!trimmed) return;
+    if (isInterviewPaused && sourceIdentity !== 'agent_bootstrap') return;
 
     const userMessage =
       sourceIdentity === 'agent_bootstrap'
@@ -1011,7 +1042,7 @@ async function createAgentSession(
         })
       : fallbackRuntimeInstruction;
 
-    if (sourceIdentity !== 'agent_bootstrap') {
+    if (sourceIdentity !== 'agent_bootstrap' && !isInterviewPaused) {
       console.log(`\n[user][${roomName}] ${trimmed}`);
       appendTranscript({ role: 'candidate', by: sourceIdentity, text: trimmed, ts: nowIso() });
     }
@@ -1046,7 +1077,7 @@ async function createAgentSession(
       if (interruptRequested || (seq > 0 && seq < latestInputSeq)) break;
       await audioPump.writePcm16le(pcmChunk);
     }
-    if (assistantText.trim()) {
+    if (assistantText.trim() && !isInterviewPaused) {
       appendTranscript({ role: 'assistant', by: selectedBotName, text: assistantText.trim(), ts: nowIso() });
     }
     assistantState = 'idle';
@@ -1134,6 +1165,31 @@ async function createAgentSession(
     if (!participant) return;
     if (isBotIdentity(participant.identity)) return;
 
+    try {
+      const raw = TEXT_DECODER.decode(payload).trim();
+      if (raw.startsWith('{')) {
+        const parsed = JSON.parse(raw);
+        if (parsed?.type === 'agent_control') {
+          if (!isModeratorParticipant(participant)) return;
+          const action = String(parsed?.action || '').trim().toLowerCase();
+          if (action === 'pause') {
+            isInterviewPaused = true;
+            interruptRequested = true;
+            if (audioPump) audioPump.clear();
+            void publishPauseState();
+          } else if (action === 'resume') {
+            isInterviewPaused = false;
+            void publishPauseState();
+          }
+          return;
+        }
+      }
+    } catch {
+      // Ignore control parsing errors and continue with normal payload flow.
+    }
+
+    if (isInterviewPaused) return;
+
     const parsed = extractPayload(payload);
     const text = parsed.text;
     if (parsed.contextUpdated) {
@@ -1172,6 +1228,7 @@ async function createAgentSession(
 
   await room.connect(livekitUrl, token);
   console.log(`[agent] connected to room '${roomName}' as '${identity}'`);
+  await publishPauseState();
 
   const audioSource = new AudioSource(TARGET_SAMPLE_RATE, TARGET_CHANNELS);
   const localTrack = LocalAudioTrack.createAudioTrack('ai-agent-audio', audioSource);

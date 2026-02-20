@@ -562,6 +562,63 @@ export default function Page() {
     }
   };
 
+  const deletePositionById = async (positionId: string) => {
+    if (!positionId) return;
+    const confirmed = window.confirm('Delete this position? This cannot be undone.');
+    if (!confirmed) return;
+
+    setSaving(true);
+    setError('');
+    setSuccess('');
+    try {
+      const response = await fetch(`/api/positions/${positionId}`, { method: 'DELETE' });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(json?.error || 'Failed to delete position');
+      }
+      setSuccess('Position deleted.');
+      if (selectedPositionId === positionId) {
+        setSelectedPositionId('');
+        setPositionDraft(null);
+      }
+      await loadData();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : 'Failed to delete position');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteInterviewById = async (interviewId: string) => {
+    if (!interviewId) return;
+    const confirmed = window.confirm('Delete this interview? This cannot be undone.');
+    if (!confirmed) return;
+
+    setSaving(true);
+    setError('');
+    setSuccess('');
+    try {
+      const response = await fetch(`/api/interviews/${interviewId}`, { method: 'DELETE' });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(json?.error || 'Failed to delete interview');
+      }
+      setSuccess('Interview deleted.');
+      if (selectedOutcomeId === interviewId) {
+        setSelectedOutcomeId('');
+      }
+      if (editingSetupId === interviewId) {
+        setEditingSetupId('');
+        setSetupForm(buildDefaultSetup(defaultAgentRoom));
+      }
+      await loadData();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : 'Failed to delete interview');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const saveAgentPromptSettings = async () => {
     setSaving(true);
     setError('');
@@ -728,6 +785,16 @@ export default function Page() {
                           <h4 style={{ marginTop: 0 }}>{positionDraft.role_title}</h4>
                           <p className={styles.interviewMeta}>{positionDraft.notes_for_interviewer || 'No JD notes saved for this position.'}</p>
                           <p className={styles.interviewMeta}>{`Role family: ${positionDraft.role_family} | Level: ${positionDraft.level}`}</p>
+                          <div className={styles.cardButtons}>
+                            <button
+                              type="button"
+                              className="lk-button"
+                              onClick={() => deletePositionById(selectedPosition.position_id)}
+                              disabled={saving}
+                            >
+                              Delete Position
+                            </button>
+                          </div>
                         </div>
                       ) : null}
 
@@ -1162,6 +1229,14 @@ export default function Page() {
                       <button type="button" className="lk-button" onClick={() => openOutcome(item.id)}>
                         View outcomes
                       </button>
+                      <button
+                        type="button"
+                        className="lk-button"
+                        onClick={() => deleteInterviewById(item.id)}
+                        disabled={saving}
+                      >
+                        Delete
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -1278,6 +1353,24 @@ export default function Page() {
                     >
                       Download Transcript
                     </a>
+                    {String(selectedOutcome.recordingUrl || '').trim() ? (
+                      <a
+                        href={`/api/interviews/${selectedOutcome.id}/download?kind=recording`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Download Recording
+                      </a>
+                    ) : (
+                      <button
+                        type="button"
+                        className={styles.assetDisabledButton}
+                        disabled
+                        title="Interview was not recorded"
+                      >
+                        Download Recording
+                      </button>
+                    )}
                   </div>
 
                   <div className={styles.cardButtons}>

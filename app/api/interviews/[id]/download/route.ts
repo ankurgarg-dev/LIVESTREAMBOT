@@ -222,8 +222,8 @@ export async function GET(
   try {
     const { id } = await ctx.params;
     const kind = String(req.nextUrl.searchParams.get('kind') || '').trim();
-    if (kind !== 'report' && kind !== 'transcript') {
-      return NextResponse.json({ error: 'kind must be report or transcript' }, { status: 400 });
+    if (kind !== 'report' && kind !== 'transcript' && kind !== 'recording') {
+      return NextResponse.json({ error: 'kind must be report, transcript, or recording' }, { status: 400 });
     }
 
     const interview = await getInterview(id);
@@ -244,6 +244,22 @@ export async function GET(
           'Cache-Control': 'no-store',
         },
       });
+    }
+    if (kind === 'recording') {
+      const recordingUrl = String(interview.recordingUrl || '').trim();
+      if (!recordingUrl) {
+        return NextResponse.json({ error: 'Recording not available yet' }, { status: 404 });
+      }
+      let parsed: URL;
+      try {
+        parsed = new URL(recordingUrl);
+      } catch {
+        return NextResponse.json({ error: 'Recording URL is invalid' }, { status: 400 });
+      }
+      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+        return NextResponse.json({ error: 'Recording URL protocol is unsupported' }, { status: 400 });
+      }
+      return NextResponse.redirect(parsed.toString(), { status: 307 });
     }
 
     const assessment = buildDerivedAssessment(interview);

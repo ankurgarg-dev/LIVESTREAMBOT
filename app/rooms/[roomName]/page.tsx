@@ -15,6 +15,7 @@ export default async function Page({
     autojoin?: string;
     name?: string;
     agentType?: string;
+    role?: string;
   }>;
 }) {
   const _params = await params;
@@ -26,6 +27,7 @@ export default async function Page({
   const hq = _searchParams.hq === 'true' ? true : false;
   const autoJoin = _searchParams.autojoin === '1' || _searchParams.autojoin === 'true';
   const participantName = typeof _searchParams.name === 'string' ? _searchParams.name : undefined;
+  const joinRole = _searchParams.role === 'moderator' ? 'moderator' : 'candidate';
   const agentType =
     _searchParams.agentType === 'realtime_screening' ? 'realtime_screening' : 'classic';
 
@@ -38,6 +40,7 @@ export default async function Page({
       autoJoin={autoJoin}
       participantName={participantName}
       agentType={agentType}
+      joinRole={joinRole}
     />
   );
 }
