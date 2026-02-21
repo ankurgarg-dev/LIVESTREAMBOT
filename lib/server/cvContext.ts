@@ -87,6 +87,56 @@ async function extractWordText(buffer: Buffer, extension: 'doc' | 'docx'): Promi
   }
 }
 
+async function extractPdfText(buffer: Buffer): Promise<string> {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cv-pdf-'));
+  const filePath = path.join(tempDir, `${randomUUID()}.pdf`);
+  try {
+    await fs.writeFile(filePath, buffer);
+
+    try {
+      const { stdout } = await execFileAsync('pdftotext', ['-q', '-layout', filePath, '-']);
+      const text = String(stdout || '').trim();
+      if (text) return text;
+    } catch {
+      // Fall through to python fallback.
+    }
+
+    try {
+      const script = `
+import sys
+from pathlib import Path
+pdf_path = Path(sys.argv[1])
+text = ""
+for module_name in ("pypdf", "PyPDF2"):
+    try:
+        mod = __import__(module_name)
+        Reader = getattr(mod, "PdfReader", None)
+        if Reader is None:
+            continue
+        reader = Reader(str(pdf_path))
+        pages = []
+        for page in reader.pages:
+            pages.append((page.extract_text() or "").strip())
+        text = "\\n\\n".join([p for p in pages if p])
+        if text.strip():
+            break
+    except Exception:
+        continue
+sys.stdout.write(text)
+`;
+      const { stdout } = await execFileAsync('python3', ['-c', script, filePath]);
+      const text = String(stdout || '').trim();
+      if (text) return text;
+    } catch {
+      // Ignore if python or PDF libs are unavailable.
+    }
+
+    return '';
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
 function compactText(input: string, max = 4000): string {
   return String(input || '')
     .replace(/\r/g, '\n')
@@ -185,10 +235,11 @@ export async function extractCandidateContextFromUpload(file: UploadedFile | nul
     text = await extractWordText(buffer, 'doc');
   } else if (/\.txt$/.test(name) || file.type.startsWith('text/')) {
     text = decodeTextBuffer(buffer);
+  } else if (/\.pdf$/.test(name) || file.type === 'application/pdf') {
+    text = await extractPdfText(buffer);
   } else {
-    // PDF and other binaries are currently not parsed in this lightweight path.
+    // Other binaries are currently not parsed in this lightweight path.
     text = '';
   }
   return buildCandidateContext(text);
 }
-
