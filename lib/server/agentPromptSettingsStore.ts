@@ -36,9 +36,24 @@ export const DEFAULT_REALTIME_SCREENING_AGENT_PROMPT = [
   '- Keep responses short and spoken-friendly.',
 ].join(' ');
 
+export const DEFAULT_SCREENING_MAX_MINUTES = 10;
+export const DEFAULT_STT_VAD_RMS_THRESHOLD = 0.005;
+export const DEFAULT_STT_MIN_SPEECH_MS = 350;
+export const DEFAULT_STT_MAX_SILENCE_MS = 2200;
+export const DEFAULT_STT_MAX_UTTERANCE_MS = 30000;
+export const DEFAULT_STT_MIN_TRANSCRIBE_MS = 1000;
+export const DEFAULT_STT_GRACE_MS = 350;
+
 export type AgentPromptSettings = {
   classicPrompt: string;
   realtimePrompt: string;
+  screeningMaxMinutes: number;
+  sttVadRmsThreshold: number;
+  sttMinSpeechMs: number;
+  sttMaxSilenceMs: number;
+  sttMaxUtteranceMs: number;
+  sttMinTranscribeMs: number;
+  sttGraceMs: number;
   updatedAt: string;
 };
 
@@ -54,6 +69,12 @@ function sanitizePrompt(value: string, fallback: string): string {
   return compact.slice(0, 12000);
 }
 
+function sanitizeNumber(value: unknown, fallback: number, min: number, max: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
 async function ensureStoreDir() {
   await mkdir(baseDir, { recursive: true });
 }
@@ -66,19 +87,51 @@ export async function getAgentPromptSettings(): Promise<AgentPromptSettings> {
     return {
       classicPrompt: sanitizePrompt(parsed.classicPrompt || '', DEFAULT_CLASSIC_AGENT_PROMPT),
       realtimePrompt: sanitizePrompt(parsed.realtimePrompt || '', DEFAULT_REALTIME_SCREENING_AGENT_PROMPT),
+      screeningMaxMinutes: sanitizeNumber(parsed.screeningMaxMinutes, DEFAULT_SCREENING_MAX_MINUTES, 1, 180),
+      sttVadRmsThreshold: sanitizeNumber(parsed.sttVadRmsThreshold, DEFAULT_STT_VAD_RMS_THRESHOLD, 0.0001, 0.1),
+      sttMinSpeechMs: sanitizeNumber(parsed.sttMinSpeechMs, DEFAULT_STT_MIN_SPEECH_MS, 1, 10000),
+      sttMaxSilenceMs: sanitizeNumber(parsed.sttMaxSilenceMs, DEFAULT_STT_MAX_SILENCE_MS, 100, 20000),
+      sttMaxUtteranceMs: sanitizeNumber(parsed.sttMaxUtteranceMs, DEFAULT_STT_MAX_UTTERANCE_MS, 1000, 120000),
+      sttMinTranscribeMs: sanitizeNumber(
+        parsed.sttMinTranscribeMs,
+        DEFAULT_STT_MIN_TRANSCRIBE_MS,
+        100,
+        10000,
+      ),
+      sttGraceMs: sanitizeNumber(parsed.sttGraceMs, DEFAULT_STT_GRACE_MS, 0, 10000),
       updatedAt: String(parsed.updatedAt || '').trim() || new Date(0).toISOString(),
     };
   } catch {
     return {
       classicPrompt: DEFAULT_CLASSIC_AGENT_PROMPT,
       realtimePrompt: DEFAULT_REALTIME_SCREENING_AGENT_PROMPT,
+      screeningMaxMinutes: DEFAULT_SCREENING_MAX_MINUTES,
+      sttVadRmsThreshold: DEFAULT_STT_VAD_RMS_THRESHOLD,
+      sttMinSpeechMs: DEFAULT_STT_MIN_SPEECH_MS,
+      sttMaxSilenceMs: DEFAULT_STT_MAX_SILENCE_MS,
+      sttMaxUtteranceMs: DEFAULT_STT_MAX_UTTERANCE_MS,
+      sttMinTranscribeMs: DEFAULT_STT_MIN_TRANSCRIBE_MS,
+      sttGraceMs: DEFAULT_STT_GRACE_MS,
       updatedAt: new Date(0).toISOString(),
     };
   }
 }
 
 export async function updateAgentPromptSettings(
-  input: Partial<Pick<AgentPromptSettings, 'classicPrompt' | 'realtimePrompt'>>,
+  input: Partial<
+    Pick<
+      AgentPromptSettings,
+      | 'classicPrompt'
+      | 'realtimePrompt'
+      | 'screeningMaxMinutes'
+      | 'sttVadRmsThreshold'
+      | 'sttMinSpeechMs'
+      | 'sttMaxSilenceMs'
+      | 'sttMaxUtteranceMs'
+      | 'sttMinTranscribeMs'
+      | 'sttGraceMs'
+    >
+  >,
 ): Promise<AgentPromptSettings> {
   const current = await getAgentPromptSettings();
   const next: AgentPromptSettings = {
@@ -90,6 +143,34 @@ export async function updateAgentPromptSettings(
       typeof input.realtimePrompt === 'string'
         ? sanitizePrompt(input.realtimePrompt, DEFAULT_REALTIME_SCREENING_AGENT_PROMPT)
         : current.realtimePrompt,
+    screeningMaxMinutes:
+      typeof input.screeningMaxMinutes === 'number'
+        ? sanitizeNumber(input.screeningMaxMinutes, current.screeningMaxMinutes, 1, 180)
+        : current.screeningMaxMinutes,
+    sttVadRmsThreshold:
+      typeof input.sttVadRmsThreshold === 'number'
+        ? sanitizeNumber(input.sttVadRmsThreshold, current.sttVadRmsThreshold, 0.0001, 0.1)
+        : current.sttVadRmsThreshold,
+    sttMinSpeechMs:
+      typeof input.sttMinSpeechMs === 'number'
+        ? sanitizeNumber(input.sttMinSpeechMs, current.sttMinSpeechMs, 1, 10000)
+        : current.sttMinSpeechMs,
+    sttMaxSilenceMs:
+      typeof input.sttMaxSilenceMs === 'number'
+        ? sanitizeNumber(input.sttMaxSilenceMs, current.sttMaxSilenceMs, 100, 20000)
+        : current.sttMaxSilenceMs,
+    sttMaxUtteranceMs:
+      typeof input.sttMaxUtteranceMs === 'number'
+        ? sanitizeNumber(input.sttMaxUtteranceMs, current.sttMaxUtteranceMs, 1000, 120000)
+        : current.sttMaxUtteranceMs,
+    sttMinTranscribeMs:
+      typeof input.sttMinTranscribeMs === 'number'
+        ? sanitizeNumber(input.sttMinTranscribeMs, current.sttMinTranscribeMs, 100, 10000)
+        : current.sttMinTranscribeMs,
+    sttGraceMs:
+      typeof input.sttGraceMs === 'number'
+        ? sanitizeNumber(input.sttGraceMs, current.sttGraceMs, 0, 10000)
+        : current.sttGraceMs,
     updatedAt: new Date().toISOString(),
   };
   await ensureStoreDir();

@@ -23,7 +23,26 @@ type PositionDetailsTab = 'job' | 'plan' | 'candidates' | 'interviews';
 type AgentPromptSettings = {
   classicPrompt: string;
   realtimePrompt: string;
+  screeningMaxMinutes: number;
+  sttVadRmsThreshold: number;
+  sttMinSpeechMs: number;
+  sttMaxSilenceMs: number;
+  sttMaxUtteranceMs: number;
+  sttMinTranscribeMs: number;
+  sttGraceMs: number;
   updatedAt?: string;
+};
+
+const DEFAULT_AGENT_SETTINGS: AgentPromptSettings = {
+  classicPrompt: '',
+  realtimePrompt: '',
+  screeningMaxMinutes: 10,
+  sttVadRmsThreshold: 0.005,
+  sttMinSpeechMs: 350,
+  sttMaxSilenceMs: 2200,
+  sttMaxUtteranceMs: 30000,
+  sttMinTranscribeMs: 1000,
+  sttGraceMs: 350,
 };
 
 type InterviewAssetMeta = {
@@ -196,10 +215,9 @@ export default function Page() {
   const [selectedOutcomeId, setSelectedOutcomeId] = useState('');
   const [setupForm, setSetupForm] = useState<SetupFormState>(() => buildDefaultSetup(defaultAgentRoom));
   const [reportDraft, setReportDraft] = useState<Record<string, string>>({});
-  const [agentPromptSettings, setAgentPromptSettings] = useState<AgentPromptSettings>({
-    classicPrompt: '',
-    realtimePrompt: '',
-  });
+  const [agentPromptSettings, setAgentPromptSettings] = useState<AgentPromptSettings>(
+    DEFAULT_AGENT_SETTINGS,
+  );
 
   const selectedOutcome = useMemo(
     () => interviews.find((item) => item.id === selectedOutcomeId),
@@ -294,6 +312,13 @@ export default function Page() {
           setAgentPromptSettings({
             classicPrompt: String(json.settings.classicPrompt || ''),
             realtimePrompt: String(json.settings.realtimePrompt || ''),
+            screeningMaxMinutes: Number(json.settings.screeningMaxMinutes ?? 10),
+            sttVadRmsThreshold: Number(json.settings.sttVadRmsThreshold ?? 0.005),
+            sttMinSpeechMs: Number(json.settings.sttMinSpeechMs ?? 350),
+            sttMaxSilenceMs: Number(json.settings.sttMaxSilenceMs ?? 2200),
+            sttMaxUtteranceMs: Number(json.settings.sttMaxUtteranceMs ?? 30000),
+            sttMinTranscribeMs: Number(json.settings.sttMinTranscribeMs ?? 1000),
+            sttGraceMs: Number(json.settings.sttGraceMs ?? 350),
             updatedAt: String(json.settings.updatedAt || ''),
           });
         } else {
@@ -630,6 +655,13 @@ export default function Page() {
         body: JSON.stringify({
           classicPrompt: agentPromptSettings.classicPrompt,
           realtimePrompt: agentPromptSettings.realtimePrompt,
+          screeningMaxMinutes: agentPromptSettings.screeningMaxMinutes,
+          sttVadRmsThreshold: agentPromptSettings.sttVadRmsThreshold,
+          sttMinSpeechMs: agentPromptSettings.sttMinSpeechMs,
+          sttMaxSilenceMs: agentPromptSettings.sttMaxSilenceMs,
+          sttMaxUtteranceMs: agentPromptSettings.sttMaxUtteranceMs,
+          sttMinTranscribeMs: agentPromptSettings.sttMinTranscribeMs,
+          sttGraceMs: agentPromptSettings.sttGraceMs,
         }),
       });
       const json = await response.json();
@@ -639,6 +671,13 @@ export default function Page() {
       setAgentPromptSettings({
         classicPrompt: String(json.settings.classicPrompt || ''),
         realtimePrompt: String(json.settings.realtimePrompt || ''),
+        screeningMaxMinutes: Number(json.settings.screeningMaxMinutes ?? 10),
+        sttVadRmsThreshold: Number(json.settings.sttVadRmsThreshold ?? 0.005),
+        sttMinSpeechMs: Number(json.settings.sttMinSpeechMs ?? 350),
+        sttMaxSilenceMs: Number(json.settings.sttMaxSilenceMs ?? 2200),
+        sttMaxUtteranceMs: Number(json.settings.sttMaxUtteranceMs ?? 30000),
+        sttMinTranscribeMs: Number(json.settings.sttMinTranscribeMs ?? 1000),
+        sttGraceMs: Number(json.settings.sttGraceMs ?? 350),
         updatedAt: String(json.settings.updatedAt || ''),
       });
       setSuccess('Agent prompt settings updated. New interviews will use these defaults.');
@@ -1392,6 +1431,114 @@ export default function Page() {
               <p className={styles.interviewMeta}>
                 Edit the base runtime context for each agent. Candidate CV and role context are still appended automatically at runtime.
               </p>
+              <div className={styles.formGrid}>
+                <label className={styles.formField}>
+                  <span className={styles.formFieldLabel}>Screening Time Limit (minutes)</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={180}
+                    value={agentPromptSettings.screeningMaxMinutes}
+                    onChange={(e) =>
+                      setAgentPromptSettings((prev) => ({
+                        ...prev,
+                        screeningMaxMinutes: Number(e.target.value || 0),
+                      }))
+                    }
+                  />
+                </label>
+                <label className={styles.formField}>
+                  <span className={styles.formFieldLabel}>VAD RMS Threshold</span>
+                  <input
+                    type="number"
+                    min={0.0001}
+                    max={0.1}
+                    step={0.0001}
+                    value={agentPromptSettings.sttVadRmsThreshold}
+                    onChange={(e) =>
+                      setAgentPromptSettings((prev) => ({
+                        ...prev,
+                        sttVadRmsThreshold: Number(e.target.value || 0),
+                      }))
+                    }
+                  />
+                </label>
+                <label className={styles.formField}>
+                  <span className={styles.formFieldLabel}>Min Speech (ms)</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={10000}
+                    value={agentPromptSettings.sttMinSpeechMs}
+                    onChange={(e) =>
+                      setAgentPromptSettings((prev) => ({
+                        ...prev,
+                        sttMinSpeechMs: Number(e.target.value || 0),
+                      }))
+                    }
+                  />
+                </label>
+                <label className={styles.formField}>
+                  <span className={styles.formFieldLabel}>Max Silence (ms)</span>
+                  <input
+                    type="number"
+                    min={100}
+                    max={20000}
+                    value={agentPromptSettings.sttMaxSilenceMs}
+                    onChange={(e) =>
+                      setAgentPromptSettings((prev) => ({
+                        ...prev,
+                        sttMaxSilenceMs: Number(e.target.value || 0),
+                      }))
+                    }
+                  />
+                </label>
+                <label className={styles.formField}>
+                  <span className={styles.formFieldLabel}>Max Utterance (ms)</span>
+                  <input
+                    type="number"
+                    min={1000}
+                    max={120000}
+                    value={agentPromptSettings.sttMaxUtteranceMs}
+                    onChange={(e) =>
+                      setAgentPromptSettings((prev) => ({
+                        ...prev,
+                        sttMaxUtteranceMs: Number(e.target.value || 0),
+                      }))
+                    }
+                  />
+                </label>
+                <label className={styles.formField}>
+                  <span className={styles.formFieldLabel}>Min Transcribe (ms)</span>
+                  <input
+                    type="number"
+                    min={100}
+                    max={10000}
+                    value={agentPromptSettings.sttMinTranscribeMs}
+                    onChange={(e) =>
+                      setAgentPromptSettings((prev) => ({
+                        ...prev,
+                        sttMinTranscribeMs: Number(e.target.value || 0),
+                      }))
+                    }
+                  />
+                </label>
+                <label className={styles.formField}>
+                  <span className={styles.formFieldLabel}>Turn-End Grace (ms)</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={10000}
+                    value={agentPromptSettings.sttGraceMs}
+                    onChange={(e) =>
+                      setAgentPromptSettings((prev) => ({
+                        ...prev,
+                        sttGraceMs: Number(e.target.value || 0),
+                      }))
+                    }
+                  />
+                </label>
+              </div>
               <label className={styles.formField}>
                 <span className={styles.formFieldLabel}>Classic Interview Agent Prompt</span>
                 <textarea

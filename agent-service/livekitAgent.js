@@ -35,6 +35,19 @@ for (const key of REQUIRED_ENV) {
   }
 }
 
+function getNumberEnv(key, fallback, { min = -Infinity, max = Infinity } = {}) {
+  const raw = process.env[key];
+  if (raw == null || String(raw).trim() === '') return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+  if (value < min || value > max) {
+    return fallback;
+  }
+  return value;
+}
+
 const TARGET_SAMPLE_RATE = 48000;
 const TARGET_CHANNELS = 1;
 const FRAME_DURATION_MS = 10;
@@ -57,7 +70,46 @@ const POST_JOIN_EMPTY_ROOM_FINALIZE_DELAY_MS = Math.max(
 const INTERVIEW_MODE = process.env.AGENT_INTERVIEW_MODE !== 'false';
 const AGENT_TYPE_CLASSIC = 'classic';
 const AGENT_TYPE_REALTIME_SCREENING = 'realtime_screening';
-const SCREENING_MAX_MINUTES = Math.max(1, Number(process.env.SCREENING_AGENT_MAX_MINUTES || 10));
+const DEFAULT_SCREENING_MAX_MINUTES = 10;
+const DEFAULT_STT_VAD_RMS_THRESHOLD = 0.005;
+const DEFAULT_STT_MIN_SPEECH_MS = 350;
+const DEFAULT_STT_MAX_SILENCE_MS = 2200;
+const DEFAULT_STT_MAX_UTTERANCE_MS = 30000;
+const DEFAULT_STT_MIN_TRANSCRIBE_MS = 1000;
+const DEFAULT_STT_GRACE_MS = 350;
+
+const SCREENING_MAX_MINUTES = getNumberEnv(
+  'SCREENING_AGENT_MAX_MINUTES',
+  DEFAULT_SCREENING_MAX_MINUTES,
+  { min: 1, max: 180 },
+);
+const STT_VAD_RMS_THRESHOLD = getNumberEnv(
+  'STT_VAD_RMS_THRESHOLD',
+  DEFAULT_STT_VAD_RMS_THRESHOLD,
+  { min: 0.0001, max: 0.1 },
+);
+const STT_MIN_SPEECH_MS = getNumberEnv('STT_MIN_SPEECH_MS', DEFAULT_STT_MIN_SPEECH_MS, {
+  min: 1,
+  max: 10000,
+});
+const STT_MAX_SILENCE_MS = getNumberEnv('STT_MAX_SILENCE_MS', DEFAULT_STT_MAX_SILENCE_MS, {
+  min: 100,
+  max: 20000,
+});
+const STT_MAX_UTTERANCE_MS = getNumberEnv(
+  'STT_MAX_UTTERANCE_MS',
+  DEFAULT_STT_MAX_UTTERANCE_MS,
+  { min: 1000, max: 120000 },
+);
+const STT_MIN_TRANSCRIBE_MS = getNumberEnv(
+  'STT_MIN_TRANSCRIBE_MS',
+  DEFAULT_STT_MIN_TRANSCRIBE_MS,
+  { min: 100, max: 10000 },
+);
+const STT_GRACE_MS = getNumberEnv('STT_GRACE_MS', DEFAULT_STT_GRACE_MS, {
+  min: 0,
+  max: 10000,
+});
 
 class PcmAudioPump {
   constructor(audioSource, { frameSamples = FRAME_SAMPLES, maxQueueSeconds = 3 } = {}) {
@@ -234,12 +286,12 @@ class SpeechTurnDetector {
     transcriptionService,
     onTranscription,
     participantIdentity,
-    rmsThreshold = Number(process.env.STT_VAD_RMS_THRESHOLD || 0.005),
-    minSpeechMs = Number(process.env.STT_MIN_SPEECH_MS || 350),
-    maxSilenceMs = Number(process.env.STT_MAX_SILENCE_MS || 2200),
-    maxUtteranceMs = Number(process.env.STT_MAX_UTTERANCE_MS || 30000),
-    minTranscribeMs = Number(process.env.STT_MIN_TRANSCRIBE_MS || 1000),
-    graceMs = Number(process.env.STT_GRACE_MS || 350),
+    rmsThreshold = STT_VAD_RMS_THRESHOLD,
+    minSpeechMs = STT_MIN_SPEECH_MS,
+    maxSilenceMs = STT_MAX_SILENCE_MS,
+    maxUtteranceMs = STT_MAX_UTTERANCE_MS,
+    minTranscribeMs = STT_MIN_TRANSCRIBE_MS,
+    graceMs = STT_GRACE_MS,
   }) {
     this.transcriptionService = transcriptionService;
     this.onTranscription = onTranscription;
@@ -466,14 +518,33 @@ async function loadPersistedPromptTemplates() {
   try {
     const raw = await fs.readFile(getAgentSettingsPath(), 'utf8');
     const parsed = JSON.parse(raw);
+    const readNumber = (value, fallback, min, max) => {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return fallback;
+      return Math.max(min, Math.min(max, n));
+    };
     return {
       classicPrompt: firstNonEmptyText(parsed?.classicPrompt) || getDefaultClassicInterviewPrompt(),
       realtimePrompt: firstNonEmptyText(parsed?.realtimePrompt) || getDefaultRealtimeScreeningPrompt(),
+      screeningMaxMinutes: readNumber(parsed?.screeningMaxMinutes, SCREENING_MAX_MINUTES, 1, 180),
+      sttVadRmsThreshold: readNumber(parsed?.sttVadRmsThreshold, STT_VAD_RMS_THRESHOLD, 0.0001, 0.1),
+      sttMinSpeechMs: readNumber(parsed?.sttMinSpeechMs, STT_MIN_SPEECH_MS, 1, 10000),
+      sttMaxSilenceMs: readNumber(parsed?.sttMaxSilenceMs, STT_MAX_SILENCE_MS, 100, 20000),
+      sttMaxUtteranceMs: readNumber(parsed?.sttMaxUtteranceMs, STT_MAX_UTTERANCE_MS, 1000, 120000),
+      sttMinTranscribeMs: readNumber(parsed?.sttMinTranscribeMs, STT_MIN_TRANSCRIBE_MS, 100, 10000),
+      sttGraceMs: readNumber(parsed?.sttGraceMs, STT_GRACE_MS, 0, 10000),
     };
   } catch {
     return {
       classicPrompt: getDefaultClassicInterviewPrompt(),
       realtimePrompt: getDefaultRealtimeScreeningPrompt(),
+      screeningMaxMinutes: SCREENING_MAX_MINUTES,
+      sttVadRmsThreshold: STT_VAD_RMS_THRESHOLD,
+      sttMinSpeechMs: STT_MIN_SPEECH_MS,
+      sttMaxSilenceMs: STT_MAX_SILENCE_MS,
+      sttMaxUtteranceMs: STT_MAX_UTTERANCE_MS,
+      sttMinTranscribeMs: STT_MIN_TRANSCRIBE_MS,
+      sttGraceMs: STT_GRACE_MS,
     };
   }
 }
@@ -526,6 +597,14 @@ async function createAgentSession(
   const selectedAgentType = normalizeAgentType(agentType);
   const livekitUrl = normalizeLiveKitUrl(process.env.LIVEKIT_URL);
   const persistedPromptTemplates = await loadPersistedPromptTemplates();
+  const sttTurnConfig = {
+    rmsThreshold: persistedPromptTemplates.sttVadRmsThreshold,
+    minSpeechMs: persistedPromptTemplates.sttMinSpeechMs,
+    maxSilenceMs: persistedPromptTemplates.sttMaxSilenceMs,
+    maxUtteranceMs: persistedPromptTemplates.sttMaxUtteranceMs,
+    minTranscribeMs: persistedPromptTemplates.sttMinTranscribeMs,
+    graceMs: persistedPromptTemplates.sttGraceMs,
+  };
   const agent = createLivekitAgent({
     roomName,
     agentType: selectedAgentType,
@@ -535,7 +614,7 @@ async function createAgentSession(
       AGENT_TYPE_REALTIME_SCREENING,
       BOT_NAME,
       INTERVIEW_MODE,
-      SCREENING_MAX_MINUTES,
+      SCREENING_MAX_MINUTES: persistedPromptTemplates.screeningMaxMinutes,
       normalizeAgentType,
       botIdentityForRoom,
       isBotIdentity,
@@ -1132,6 +1211,7 @@ async function createAgentSession(
     const turnDetector = new SpeechTurnDetector({
       transcriptionService,
       participantIdentity: participant.identity,
+      ...sttTurnConfig,
       onTranscription: async (text) => {
         queueUserTurn(text, participant.identity);
       },
