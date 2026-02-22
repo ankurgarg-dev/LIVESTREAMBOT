@@ -53,6 +53,9 @@ jobs:
           aws s3 sync lib "s3://${DEPLOY_BUCKET}/ui-update/lib" --delete
           aws s3 sync styles "s3://${DEPLOY_BUCKET}/ui-update/styles" --delete
           aws s3 sync visualizer "s3://${DEPLOY_BUCKET}/ui-update/visualizer" --delete
+          aws s3 cp package.json "s3://${DEPLOY_BUCKET}/ui-update/package.json"
+          aws s3 cp pnpm-lock.yaml "s3://${DEPLOY_BUCKET}/ui-update/pnpm-lock.yaml"
+          aws s3 sync prisma "s3://${DEPLOY_BUCKET}/ui-update/prisma" --delete
           aws s3 sync agent-service "s3://${DEPLOY_BUCKET}/ui-update/agent-service" --delete --exclude ".env" --exclude "node_modules/*"
           printf '%s\n' "${GITHUB_SHA}" | aws s3 cp - "s3://${DEPLOY_BUCKET}/ui-update/DEPLOYED_GIT_SHA"
 
@@ -70,7 +73,15 @@ jobs:
             ("aws s3 sync s3://" + $b + "/ui-update/lib ./lib --delete --exact-timestamps"),
             ("aws s3 sync s3://" + $b + "/ui-update/styles ./styles --delete --exact-timestamps"),
             ("aws s3 sync s3://" + $b + "/ui-update/visualizer ./visualizer --delete --exact-timestamps"),
+            ("aws s3 cp s3://" + $b + "/ui-update/package.json ./package.json"),
+            ("aws s3 cp s3://" + $b + "/ui-update/pnpm-lock.yaml ./pnpm-lock.yaml"),
+            ("aws s3 sync s3://" + $b + "/ui-update/prisma ./prisma --delete --exact-timestamps"),
             ("aws s3 sync s3://" + $b + "/ui-update/agent-service ./agent-service --delete --exact-timestamps --exclude \".env\" --exclude \"node_modules/*\""),
+            "corepack pnpm install --frozen-lockfile",
+            "export DATABASE_URL=${DATABASE_URL:-file:./prisma/.runtime/interviewbot.db}",
+            "mkdir -p ./prisma/.runtime",
+            "corepack pnpm prisma:generate",
+            "corepack pnpm prisma:push",
             "npm --prefix /opt/bristlecone-app/agent-service install --omit=dev",
             "sudo systemctl restart bristlecone-agent.service",
             "sudo systemctl is-active bristlecone-agent.service",
