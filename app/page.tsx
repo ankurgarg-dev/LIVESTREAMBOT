@@ -1012,206 +1012,248 @@ export default function Page() {
 
                 {positionDraft ? (
                   <>
-                    <input
-                      value={positionDraft.role_title}
-                      onChange={(e) => setPositionDraft((prev) => (prev ? { ...prev, role_title: e.target.value } : prev))}
-                      placeholder="Job Title"
-                      required
-                    />
-                    <select
-                      value={positionDraft.role_family}
-                      onChange={(e) =>
-                        setPositionDraft((prev) =>
-                          prev ? { ...prev, role_family: e.target.value as PositionConfigCore['role_family'] } : prev,
-                        )
-                      }
-                    >
-                      {ROLE_FAMILIES.map((v) => (
-                        <option key={v} value={v}>
-                          {v}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      value={positionDraft.level}
-                      onChange={(e) =>
-                        setPositionDraft((prev) =>
-                          prev ? { ...prev, level: e.target.value as PositionConfigCore['level'] } : prev,
-                        )
-                      }
-                    >
-                      {LEVELS.map((v) => (
-                        <option key={v} value={v}>
-                          {v}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      value={positionDraft.interview_round_type}
-                      onChange={(e) =>
-                        setPositionDraft((prev) =>
-                          prev
-                            ? {
-                                ...prev,
-                                interview_round_type: e.target.value as PositionConfigCore['interview_round_type'],
-                              }
-                            : prev,
-                        )
-                      }
-                    >
-                      {INTERVIEW_ROUND_TYPES.map((v) => (
-                        <option key={v} value={v}>
-                          {v}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      value={positionDraft.archetype_id}
-                      onChange={(e) =>
-                        setPositionDraft((prev) =>
-                          prev ? { ...prev, archetype_id: e.target.value as PositionConfigCore['archetype_id'] } : prev,
-                        )
-                      }
-                    >
-                      {ARCHETYPES.map((v) => (
-                        <option key={v} value={v}>
-                          {v}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      value={positionDraft.duration_minutes}
-                      onChange={(e) =>
-                        setPositionDraft((prev) =>
-                          prev
-                            ? {
-                                ...prev,
-                                duration_minutes: Number(e.target.value) as PositionConfigCore['duration_minutes'],
-                              }
-                            : prev,
-                        )
-                      }
-                    >
-                      {DURATIONS.map((v) => (
-                        <option key={v} value={v}>
-                          {v}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      value={positionDraft.deep_dive_mode}
-                      onChange={(e) =>
-                        setPositionDraft((prev) =>
-                          prev
-                            ? {
-                                ...prev,
-                                deep_dive_mode: e.target.value as PositionConfigCore['deep_dive_mode'],
-                              }
-                            : prev,
-                        )
-                      }
-                    >
-                      {DEEP_DIVE_MODES.map((v) => (
-                        <option key={v} value={v}>
-                          {v}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      value={positionDraft.strictness}
-                      onChange={(e) =>
-                        setPositionDraft((prev) =>
-                          prev ? { ...prev, strictness: e.target.value as PositionConfigCore['strictness'] } : prev,
-                        )
-                      }
-                    >
-                      {STRICTNESS_LEVELS.map((v) => (
-                        <option key={v} value={v}>
-                          {v}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      value={positionDraft.evaluation_policy}
-                      onChange={(e) =>
-                        setPositionDraft((prev) =>
-                          prev
-                            ? {
-                                ...prev,
-                                evaluation_policy: e.target.value as PositionConfigCore['evaluation_policy'],
-                              }
-                            : prev,
-                        )
-                      }
-                    >
-                      {EVALUATION_POLICIES.map((v) => (
-                        <option key={v} value={v}>
-                          {v}
-                        </option>
-                      ))}
-                    </select>
+                    <label className={styles.formField}>
+                      <span className={styles.formFieldLabel}>Position Title</span>
+                      <input
+                        value={positionDraft.role_title}
+                        onChange={(e) => setPositionDraft((prev) => (prev ? { ...prev, role_title: e.target.value } : prev))}
+                        placeholder="Job Title"
+                        required
+                      />
+                    </label>
+                    <label className={styles.formField}>
+                      <span className={styles.formFieldLabel}>Role Family</span>
+                      <select
+                        value={positionDraft.role_family}
+                        onChange={(e) =>
+                          setPositionDraft((prev) =>
+                            prev ? { ...prev, role_family: e.target.value as PositionConfigCore['role_family'] } : prev,
+                          )
+                        }
+                      >
+                        {ROLE_FAMILIES.map((v) => (
+                          <option key={v} value={v}>
+                            {v}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className={styles.formField}>
+                      <span className={styles.formFieldLabel}>Level</span>
+                      <select
+                        value={positionDraft.level}
+                        onChange={(e) =>
+                          setPositionDraft((prev) =>
+                            prev ? { ...prev, level: e.target.value as PositionConfigCore['level'] } : prev,
+                          )
+                        }
+                      >
+                        {LEVELS.map((v) => (
+                          <option key={v} value={v}>
+                            {v}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className={styles.formField}>
+                      <span className={styles.formFieldLabel}>Interview Round Type</span>
+                      <select
+                        value={positionDraft.interview_round_type}
+                        onChange={(e) =>
+                          setPositionDraft((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  interview_round_type: e.target.value as PositionConfigCore['interview_round_type'],
+                                }
+                              : prev,
+                          )
+                        }
+                      >
+                        {INTERVIEW_ROUND_TYPES.map((v) => (
+                          <option key={v} value={v}>
+                            {v}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className={styles.formField}>
+                      <span className={styles.formFieldLabel}>Archetype</span>
+                      <select
+                        value={positionDraft.archetype_id}
+                        onChange={(e) =>
+                          setPositionDraft((prev) =>
+                            prev ? { ...prev, archetype_id: e.target.value as PositionConfigCore['archetype_id'] } : prev,
+                          )
+                        }
+                      >
+                        {ARCHETYPES.map((v) => (
+                          <option key={v} value={v}>
+                            {v}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className={styles.formField}>
+                      <span className={styles.formFieldLabel}>Interview Duration (minutes)</span>
+                      <select
+                        value={positionDraft.duration_minutes}
+                        onChange={(e) =>
+                          setPositionDraft((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  duration_minutes: Number(e.target.value) as PositionConfigCore['duration_minutes'],
+                                }
+                              : prev,
+                          )
+                        }
+                      >
+                        {DURATIONS.map((v) => (
+                          <option key={v} value={v}>
+                            {v}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className={styles.formField}>
+                      <span className={styles.formFieldLabel}>Deep Dive Mode</span>
+                      <select
+                        value={positionDraft.deep_dive_mode}
+                        onChange={(e) =>
+                          setPositionDraft((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  deep_dive_mode: e.target.value as PositionConfigCore['deep_dive_mode'],
+                                }
+                              : prev,
+                          )
+                        }
+                      >
+                        {DEEP_DIVE_MODES.map((v) => (
+                          <option key={v} value={v}>
+                            {v}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className={styles.formField}>
+                      <span className={styles.formFieldLabel}>Strictness</span>
+                      <select
+                        value={positionDraft.strictness}
+                        onChange={(e) =>
+                          setPositionDraft((prev) =>
+                            prev ? { ...prev, strictness: e.target.value as PositionConfigCore['strictness'] } : prev,
+                          )
+                        }
+                      >
+                        {STRICTNESS_LEVELS.map((v) => (
+                          <option key={v} value={v}>
+                            {v}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className={styles.formField}>
+                      <span className={styles.formFieldLabel}>Evaluation Policy</span>
+                      <select
+                        value={positionDraft.evaluation_policy}
+                        onChange={(e) =>
+                          setPositionDraft((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  evaluation_policy: e.target.value as PositionConfigCore['evaluation_policy'],
+                                }
+                              : prev,
+                          )
+                        }
+                      >
+                        {EVALUATION_POLICIES.map((v) => (
+                          <option key={v} value={v}>
+                            {v}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
 
-                    <textarea
-                      rows={2}
-                      value={toListInput(positionDraft.must_haves)}
-                      placeholder="Must haves (comma separated)"
-                      onChange={(e) =>
-                        setPositionDraft((prev) =>
-                          prev ? { ...prev, must_haves: parseListInput(e.target.value).slice(0, 8) } : prev,
-                        )
-                      }
-                    />
-                    <textarea
-                      rows={2}
-                      value={toListInput(positionDraft.nice_to_haves)}
-                      placeholder="Nice to haves (comma separated)"
-                      onChange={(e) =>
-                        setPositionDraft((prev) =>
-                          prev ? { ...prev, nice_to_haves: parseListInput(e.target.value).slice(0, 8) } : prev,
-                        )
-                      }
-                    />
-                    <textarea
-                      rows={2}
-                      value={toListInput(positionDraft.tech_stack)}
-                      placeholder="Tech stack (comma separated)"
-                      onChange={(e) =>
-                        setPositionDraft((prev) =>
-                          prev ? { ...prev, tech_stack: parseListInput(e.target.value).slice(0, 15) } : prev,
-                        )
-                      }
-                    />
-                    <textarea
-                      rows={2}
-                      value={toListInput(positionDraft.focus_areas)}
-                      placeholder="Focus areas (comma separated)"
-                      onChange={(e) =>
-                        setPositionDraft((prev) =>
-                          prev
-                            ? {
-                                ...prev,
-                                focus_areas: parseListInput(e.target.value)
-                                  .map((v) => v.toLowerCase().replace(/\s+/g, '_'))
-                                  .filter(
-                                    (v): v is PositionConfigCore['focus_areas'][number] =>
-                                      FOCUS_AREAS.includes(v as PositionConfigCore['focus_areas'][number]),
-                                  )
-                                  .slice(0, 4),
-                              }
-                            : prev,
-                        )
-                      }
-                    />
-                    <textarea
-                      rows={3}
-                      value={positionDraft.notes_for_interviewer}
-                      placeholder="Position notes for interviewer"
-                      onChange={(e) =>
-                        setPositionDraft((prev) =>
-                          prev ? { ...prev, notes_for_interviewer: e.target.value.slice(0, 600) } : prev,
-                        )
-                      }
-                    />
+                    <label className={styles.formField}>
+                      <span className={styles.formFieldLabel}>Must Haves</span>
+                      <textarea
+                        rows={2}
+                        value={toListInput(positionDraft.must_haves)}
+                        placeholder="Must haves (comma separated)"
+                        onChange={(e) =>
+                          setPositionDraft((prev) =>
+                            prev ? { ...prev, must_haves: parseListInput(e.target.value).slice(0, 8) } : prev,
+                          )
+                        }
+                      />
+                    </label>
+                    <label className={styles.formField}>
+                      <span className={styles.formFieldLabel}>Nice to Haves</span>
+                      <textarea
+                        rows={2}
+                        value={toListInput(positionDraft.nice_to_haves)}
+                        placeholder="Nice to haves (comma separated)"
+                        onChange={(e) =>
+                          setPositionDraft((prev) =>
+                            prev ? { ...prev, nice_to_haves: parseListInput(e.target.value).slice(0, 8) } : prev,
+                          )
+                        }
+                      />
+                    </label>
+                    <label className={styles.formField}>
+                      <span className={styles.formFieldLabel}>Tech Stack</span>
+                      <textarea
+                        rows={2}
+                        value={toListInput(positionDraft.tech_stack)}
+                        placeholder="Tech stack (comma separated)"
+                        onChange={(e) =>
+                          setPositionDraft((prev) =>
+                            prev ? { ...prev, tech_stack: parseListInput(e.target.value).slice(0, 15) } : prev,
+                          )
+                        }
+                      />
+                    </label>
+                    <label className={styles.formField}>
+                      <span className={styles.formFieldLabel}>Focus Areas</span>
+                      <textarea
+                        rows={2}
+                        value={toListInput(positionDraft.focus_areas)}
+                        placeholder="Focus areas (comma separated)"
+                        onChange={(e) =>
+                          setPositionDraft((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  focus_areas: parseListInput(e.target.value)
+                                    .map((v) => v.toLowerCase().replace(/\s+/g, '_'))
+                                    .filter(
+                                      (v): v is PositionConfigCore['focus_areas'][number] =>
+                                        FOCUS_AREAS.includes(v as PositionConfigCore['focus_areas'][number]),
+                                    )
+                                    .slice(0, 4),
+                                }
+                              : prev,
+                          )
+                        }
+                      />
+                    </label>
+                    <label className={styles.formField}>
+                      <span className={styles.formFieldLabel}>Position Notes For Interviewer</span>
+                      <textarea
+                        rows={3}
+                        value={positionDraft.notes_for_interviewer}
+                        placeholder="Position notes for interviewer"
+                        onChange={(e) =>
+                          setPositionDraft((prev) =>
+                            prev ? { ...prev, notes_for_interviewer: e.target.value.slice(0, 600) } : prev,
+                          )
+                        }
+                      />
+                    </label>
                   </>
                 ) : null}
 
@@ -1222,12 +1264,15 @@ export default function Page() {
                   </label>
                 ) : null}
 
-                <textarea
-                  rows={3}
-                  value={setupForm.notes}
-                  onChange={(e) => setSetupForm((prev) => ({ ...prev, notes: e.target.value }))}
-                  placeholder="Additional setup notes / constraints"
-                />
+                <label className={styles.formField}>
+                  <span className={styles.formFieldLabel}>Additional Setup Notes / Constraints</span>
+                  <textarea
+                    rows={3}
+                    value={setupForm.notes}
+                    onChange={(e) => setSetupForm((prev) => ({ ...prev, notes: e.target.value }))}
+                    placeholder="Additional setup notes / constraints"
+                  />
+                </label>
 
                 <div className={styles.cardButtons}>
                   <button className="lk-button" type="submit" disabled={saving}>
@@ -1285,82 +1330,115 @@ export default function Page() {
                 <div className={styles.reportPanel}>
                   <h4 style={{ marginTop: 0 }}>{`Interview Output: ${selectedOutcome.candidateName}`}</h4>
                   <div className={styles.reportGrid}>
-                    <select
-                      value={reportDraft.status ?? ''}
-                      onChange={(e) => setReportDraft((prev) => ({ ...prev, status: e.target.value }))}
-                    >
-                      <option value="scheduled">Scheduled</option>
-                      <option value="completed">Completed</option>
-                      <option value="cancelled">Cancelled</option>
-                    </select>
-                    <input
-                      type="datetime-local"
-                      value={reportDraft.meetingActualStart ?? ''}
-                      onChange={(e) => setReportDraft((prev) => ({ ...prev, meetingActualStart: e.target.value }))}
-                      title="Actual start"
-                    />
-                    <input
-                      type="datetime-local"
-                      value={reportDraft.meetingActualEnd ?? ''}
-                      onChange={(e) => setReportDraft((prev) => ({ ...prev, meetingActualEnd: e.target.value }))}
-                      title="Actual end"
-                    />
-                    <input
-                      value={reportDraft.recordingUrl ?? ''}
-                      placeholder="Recording URL (S3/http)"
-                      onChange={(e) => setReportDraft((prev) => ({ ...prev, recordingUrl: e.target.value }))}
-                    />
-                    <input
-                      type="number"
-                      min={0}
-                      max={10}
-                      step={0.1}
-                      value={reportDraft.rubricScore ?? ''}
-                      placeholder="Rubric Score (0-10)"
-                      onChange={(e) => setReportDraft((prev) => ({ ...prev, rubricScore: e.target.value }))}
-                    />
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      value={reportDraft.interviewScore ?? ''}
-                      placeholder="Interview Score (0-100)"
-                      onChange={(e) => setReportDraft((prev) => ({ ...prev, interviewScore: e.target.value }))}
-                    />
-                    <select
-                      value={reportDraft.recommendation ?? ''}
-                      onChange={(e) => setReportDraft((prev) => ({ ...prev, recommendation: e.target.value }))}
-                    >
-                      <option value="">Recommendation</option>
-                      <option value="strong_hire">Strong Hire</option>
-                      <option value="hire">Hire</option>
-                      <option value="hold">Hold</option>
-                      <option value="no_hire">No Hire</option>
-                    </select>
-                    <textarea
-                      rows={2}
-                      value={reportDraft.participantsJoined ?? ''}
-                      placeholder="Participants joined (names/emails)"
-                      onChange={(e) => setReportDraft((prev) => ({ ...prev, participantsJoined: e.target.value }))}
-                    />
-                    <textarea
-                      rows={3}
-                      value={reportDraft.summaryFeedback ?? ''}
-                      placeholder="Summary interview feedback"
-                      onChange={(e) => setReportDraft((prev) => ({ ...prev, summaryFeedback: e.target.value }))}
-                    />
-                    <textarea
-                      rows={5}
-                      value={reportDraft.detailedFeedback ?? ''}
-                      placeholder="Detailed interview feedback"
-                      onChange={(e) => setReportDraft((prev) => ({ ...prev, detailedFeedback: e.target.value }))}
-                    />
-                    <textarea
-                      rows={3}
-                      value={reportDraft.nextSteps ?? ''}
-                      placeholder="Recommendation rationale / next steps"
-                      onChange={(e) => setReportDraft((prev) => ({ ...prev, nextSteps: e.target.value }))}
-                    />
+                    <label className={styles.formField}>
+                      <span className={styles.formFieldLabel}>Interview Status</span>
+                      <select
+                        value={reportDraft.status ?? ''}
+                        onChange={(e) => setReportDraft((prev) => ({ ...prev, status: e.target.value }))}
+                      >
+                        <option value="scheduled">Scheduled</option>
+                        <option value="completed">Completed</option>
+                        <option value="cancelled">Cancelled</option>
+                      </select>
+                    </label>
+                    <label className={styles.formField}>
+                      <span className={styles.formFieldLabel}>Actual Start</span>
+                      <input
+                        type="datetime-local"
+                        value={reportDraft.meetingActualStart ?? ''}
+                        onChange={(e) => setReportDraft((prev) => ({ ...prev, meetingActualStart: e.target.value }))}
+                        title="Actual start"
+                      />
+                    </label>
+                    <label className={styles.formField}>
+                      <span className={styles.formFieldLabel}>Actual End</span>
+                      <input
+                        type="datetime-local"
+                        value={reportDraft.meetingActualEnd ?? ''}
+                        onChange={(e) => setReportDraft((prev) => ({ ...prev, meetingActualEnd: e.target.value }))}
+                        title="Actual end"
+                      />
+                    </label>
+                    <label className={styles.formField}>
+                      <span className={styles.formFieldLabel}>Recording URL</span>
+                      <input
+                        value={reportDraft.recordingUrl ?? ''}
+                        placeholder="Recording URL (S3/http)"
+                        onChange={(e) => setReportDraft((prev) => ({ ...prev, recordingUrl: e.target.value }))}
+                      />
+                    </label>
+                    <label className={styles.formField}>
+                      <span className={styles.formFieldLabel}>Rubric Score (0-10)</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={10}
+                        step={0.1}
+                        value={reportDraft.rubricScore ?? ''}
+                        placeholder="Rubric Score (0-10)"
+                        onChange={(e) => setReportDraft((prev) => ({ ...prev, rubricScore: e.target.value }))}
+                      />
+                    </label>
+                    <label className={styles.formField}>
+                      <span className={styles.formFieldLabel}>Interview Score (0-100)</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={reportDraft.interviewScore ?? ''}
+                        placeholder="Interview Score (0-100)"
+                        onChange={(e) => setReportDraft((prev) => ({ ...prev, interviewScore: e.target.value }))}
+                      />
+                    </label>
+                    <label className={styles.formField}>
+                      <span className={styles.formFieldLabel}>Recommendation</span>
+                      <select
+                        value={reportDraft.recommendation ?? ''}
+                        onChange={(e) => setReportDraft((prev) => ({ ...prev, recommendation: e.target.value }))}
+                      >
+                        <option value="">Recommendation</option>
+                        <option value="strong_hire">Strong Hire</option>
+                        <option value="hire">Hire</option>
+                        <option value="hold">Hold</option>
+                        <option value="no_hire">No Hire</option>
+                      </select>
+                    </label>
+                    <label className={styles.formField}>
+                      <span className={styles.formFieldLabel}>Participants Joined</span>
+                      <textarea
+                        rows={2}
+                        value={reportDraft.participantsJoined ?? ''}
+                        placeholder="Participants joined (names/emails)"
+                        onChange={(e) => setReportDraft((prev) => ({ ...prev, participantsJoined: e.target.value }))}
+                      />
+                    </label>
+                    <label className={styles.formField}>
+                      <span className={styles.formFieldLabel}>Summary Interview Feedback</span>
+                      <textarea
+                        rows={3}
+                        value={reportDraft.summaryFeedback ?? ''}
+                        placeholder="Summary interview feedback"
+                        onChange={(e) => setReportDraft((prev) => ({ ...prev, summaryFeedback: e.target.value }))}
+                      />
+                    </label>
+                    <label className={styles.formField}>
+                      <span className={styles.formFieldLabel}>Detailed Interview Feedback</span>
+                      <textarea
+                        rows={5}
+                        value={reportDraft.detailedFeedback ?? ''}
+                        placeholder="Detailed interview feedback"
+                        onChange={(e) => setReportDraft((prev) => ({ ...prev, detailedFeedback: e.target.value }))}
+                      />
+                    </label>
+                    <label className={styles.formField}>
+                      <span className={styles.formFieldLabel}>Next Steps</span>
+                      <textarea
+                        rows={3}
+                        value={reportDraft.nextSteps ?? ''}
+                        placeholder="Recommendation rationale / next steps"
+                        onChange={(e) => setReportDraft((prev) => ({ ...prev, nextSteps: e.target.value }))}
+                      />
+                    </label>
                   </div>
 
                   <div className={styles.assetRow}>

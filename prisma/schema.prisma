@@ -1,0 +1,38 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Interview {
+  id            String   @id
+  roomName      String
+  candidateName String
+  status        String
+  agentType     String
+  createdAt     DateTime
+  updatedAt     DateTime
+  payload       Json
+
+  @@index([roomName, updatedAt(sort: Desc)])
+  @@index([updatedAt(sort: Desc)])
+}
+
+model Position {
+  id        String   @id
+  roleTitle String
+  createdAt DateTime
+  updatedAt DateTime
+  payload   Json
+
+  @@index([updatedAt(sort: Desc)])
+}
+
+model AgentSetting {
+  id        Int      @id
+  payload   Json
+  updatedAt DateTime
+}

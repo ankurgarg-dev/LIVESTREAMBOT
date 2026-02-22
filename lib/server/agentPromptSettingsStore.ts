@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { getPrismaClient } from '@/lib/server/prismaClient';
 
 export const DEFAULT_CLASSIC_AGENT_PROMPT = [
   'You are a human-like technical interviewer in a live voice call.',
@@ -62,6 +63,7 @@ const baseDir =
 const settingsPath = path.join(baseDir, 'agent-settings.json');
 
 type AgentPromptSettingsPayload = Partial<AgentPromptSettings>;
+let bootstrapped = false;
 
 function sanitizePrompt(value: string, fallback: string): string {
   const compact = String(value || '').replace(/\r/g, '\n').trim();
@@ -79,41 +81,69 @@ async function ensureStoreDir() {
   await mkdir(baseDir, { recursive: true });
 }
 
-export async function getAgentPromptSettings(): Promise<AgentPromptSettings> {
+function normalizeSettings(input?: AgentPromptSettingsPayload): AgentPromptSettings {
+  const parsed = input || {};
+  return {
+    classicPrompt: sanitizePrompt(parsed.classicPrompt || '', DEFAULT_CLASSIC_AGENT_PROMPT),
+    realtimePrompt: sanitizePrompt(parsed.realtimePrompt || '', DEFAULT_REALTIME_SCREENING_AGENT_PROMPT),
+    screeningMaxMinutes: sanitizeNumber(parsed.screeningMaxMinutes, DEFAULT_SCREENING_MAX_MINUTES, 1, 180),
+    sttVadRmsThreshold: sanitizeNumber(parsed.sttVadRmsThreshold, DEFAULT_STT_VAD_RMS_THRESHOLD, 0.0001, 0.1),
+    sttMinSpeechMs: sanitizeNumber(parsed.sttMinSpeechMs, DEFAULT_STT_MIN_SPEECH_MS, 1, 10000),
+    sttMaxSilenceMs: sanitizeNumber(parsed.sttMaxSilenceMs, DEFAULT_STT_MAX_SILENCE_MS, 100, 20000),
+    sttMaxUtteranceMs: sanitizeNumber(parsed.sttMaxUtteranceMs, DEFAULT_STT_MAX_UTTERANCE_MS, 1000, 120000),
+    sttMinTranscribeMs: sanitizeNumber(parsed.sttMinTranscribeMs, DEFAULT_STT_MIN_TRANSCRIBE_MS, 100, 10000),
+    sttGraceMs: sanitizeNumber(parsed.sttGraceMs, DEFAULT_STT_GRACE_MS, 0, 10000),
+    updatedAt: String(parsed.updatedAt || '').trim() || new Date(0).toISOString(),
+  };
+}
+
+async function readFileSettings(): Promise<AgentPromptSettings> {
   await ensureStoreDir();
   try {
     const raw = await readFile(settingsPath, 'utf8');
     const parsed = JSON.parse(raw) as AgentPromptSettingsPayload;
-    return {
-      classicPrompt: sanitizePrompt(parsed.classicPrompt || '', DEFAULT_CLASSIC_AGENT_PROMPT),
-      realtimePrompt: sanitizePrompt(parsed.realtimePrompt || '', DEFAULT_REALTIME_SCREENING_AGENT_PROMPT),
-      screeningMaxMinutes: sanitizeNumber(parsed.screeningMaxMinutes, DEFAULT_SCREENING_MAX_MINUTES, 1, 180),
-      sttVadRmsThreshold: sanitizeNumber(parsed.sttVadRmsThreshold, DEFAULT_STT_VAD_RMS_THRESHOLD, 0.0001, 0.1),
-      sttMinSpeechMs: sanitizeNumber(parsed.sttMinSpeechMs, DEFAULT_STT_MIN_SPEECH_MS, 1, 10000),
-      sttMaxSilenceMs: sanitizeNumber(parsed.sttMaxSilenceMs, DEFAULT_STT_MAX_SILENCE_MS, 100, 20000),
-      sttMaxUtteranceMs: sanitizeNumber(parsed.sttMaxUtteranceMs, DEFAULT_STT_MAX_UTTERANCE_MS, 1000, 120000),
-      sttMinTranscribeMs: sanitizeNumber(
-        parsed.sttMinTranscribeMs,
-        DEFAULT_STT_MIN_TRANSCRIBE_MS,
-        100,
-        10000,
-      ),
-      sttGraceMs: sanitizeNumber(parsed.sttGraceMs, DEFAULT_STT_GRACE_MS, 0, 10000),
-      updatedAt: String(parsed.updatedAt || '').trim() || new Date(0).toISOString(),
-    };
+    return normalizeSettings(parsed);
   } catch {
-    return {
-      classicPrompt: DEFAULT_CLASSIC_AGENT_PROMPT,
-      realtimePrompt: DEFAULT_REALTIME_SCREENING_AGENT_PROMPT,
-      screeningMaxMinutes: DEFAULT_SCREENING_MAX_MINUTES,
-      sttVadRmsThreshold: DEFAULT_STT_VAD_RMS_THRESHOLD,
-      sttMinSpeechMs: DEFAULT_STT_MIN_SPEECH_MS,
-      sttMaxSilenceMs: DEFAULT_STT_MAX_SILENCE_MS,
-      sttMaxUtteranceMs: DEFAULT_STT_MAX_UTTERANCE_MS,
-      sttMinTranscribeMs: DEFAULT_STT_MIN_TRANSCRIBE_MS,
-      sttGraceMs: DEFAULT_STT_GRACE_MS,
-      updatedAt: new Date(0).toISOString(),
-    };
+    return normalizeSettings();
+  }
+}
+
+async function writeFileSettings(next: AgentPromptSettings): Promise<void> {
+  await ensureStoreDir();
+  await writeFile(settingsPath, JSON.stringify(next, null, 2), 'utf8');
+}
+
+async function bootstrapFromFileIfNeeded() {
+  if (bootstrapped) return;
+  bootstrapped = true;
+  const prisma = getPrismaClient();
+  if (!prisma) return;
+  try {
+    const existing = await prisma.agentSetting.findUnique({ where: { id: 1 } });
+    if (existing) return;
+    const fileSettings = await readFileSettings();
+    await prisma.agentSetting.create({
+      data: {
+        id: 1,
+        payload: fileSettings,
+        updatedAt: new Date(fileSettings.updatedAt),
+      },
+    });
+  } catch (error) {
+    console.warn('[storage] agent settings bootstrap fallback to file store:', error);
+  }
+}
+
+export async function getAgentPromptSettings(): Promise<AgentPromptSettings> {
+  await bootstrapFromFileIfNeeded();
+  const prisma = getPrismaClient();
+  if (!prisma) return readFileSettings();
+  try {
+    const row = await prisma.agentSetting.findUnique({ where: { id: 1 } });
+    if (!row) return normalizeSettings();
+    return normalizeSettings(row.payload as AgentPromptSettingsPayload);
+  } catch {
+    return readFileSettings();
   }
 }
 
@@ -173,7 +203,21 @@ export async function updateAgentPromptSettings(
         : current.sttGraceMs,
     updatedAt: new Date().toISOString(),
   };
-  await ensureStoreDir();
-  await writeFile(settingsPath, JSON.stringify(next, null, 2), 'utf8');
-  return next;
+
+  const prisma = getPrismaClient();
+  if (!prisma) {
+    await writeFileSettings(next);
+    return next;
+  }
+  try {
+    await prisma.agentSetting.upsert({
+      where: { id: 1 },
+      create: { id: 1, payload: next, updatedAt: new Date(next.updatedAt) },
+      update: { payload: next, updatedAt: new Date(next.updatedAt) },
+    });
+    return next;
+  } catch {
+    await writeFileSettings(next);
+    return next;
+  }
 }
