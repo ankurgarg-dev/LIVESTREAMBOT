@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { mkdir, readFile, stat, unlink, writeFile } from 'fs/promises';
+import { mkdir, stat, unlink, writeFile } from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { getPrismaClient } from '@/lib/server/prismaClient';
@@ -146,43 +146,12 @@ type UploadedFile = {
   arrayBuffer: () => Promise<ArrayBuffer>;
 };
 
-type InterviewStorePayload = {
-  interviews: InterviewRecord[];
-};
-
 const baseDir =
   process.env.INTERVIEW_DATA_DIR ?? path.join(os.homedir(), '.bristlecone-data', 'interviews');
 const uploadsDir = path.join(baseDir, 'uploads');
-const dbPath = path.join(baseDir, 'interviews.json');
-
-let bootstrapped = false;
 
 async function ensureStoreDirs() {
   await mkdir(uploadsDir, { recursive: true });
-}
-
-async function readPayload(): Promise<InterviewStorePayload> {
-  await ensureStoreDirs();
-  try {
-    const raw = await readFile(dbPath, 'utf8');
-    const parsed = JSON.parse(raw) as InterviewStorePayload;
-    if (!Array.isArray(parsed.interviews)) {
-      return { interviews: [] };
-    }
-    return {
-      interviews: parsed.interviews.map((entry) => ({
-        ...entry,
-        agentType: entry.agentType === 'realtime_screening' ? 'realtime_screening' : 'classic',
-      })),
-    };
-  } catch {
-    return { interviews: [] };
-  }
-}
-
-async function writePayload(payload: InterviewStorePayload): Promise<void> {
-  await ensureStoreDirs();
-  await writeFile(dbPath, JSON.stringify(payload, null, 2), 'utf8');
 }
 
 function sanitizeFilename(name: string): string {
@@ -198,56 +167,33 @@ function asInterviewRecord(value: unknown): InterviewRecord | null {
   };
 }
 
-async function bootstrapFromFileIfNeeded() {
-  if (bootstrapped) return;
-  bootstrapped = true;
+export async function listInterviews(): Promise<InterviewRecord[]> {
   const prisma = getPrismaClient();
-  if (!prisma) return;
-  try {
-    const count = await prisma.interview.count();
-    if (count > 0) return;
-    const filePayload = await readPayload();
-    if (filePayload.interviews.length === 0) return;
-    for (const interview of filePayload.interviews) {
-      await prisma.interview.create({
-        data: {
-          id: interview.id,
-          roomName: interview.roomName,
-          candidateName: interview.candidateName,
-          status: interview.status,
-          agentType: interview.agentType,
-          createdAt: new Date(interview.createdAt),
-          updatedAt: new Date(interview.updatedAt),
-          payload: interview,
-        },
-      });
-    }
-  } catch (error) {
-    console.warn('[storage] interview bootstrap fallback to file store:', error);
-  }
+  const rows = await prisma.interview.findMany({ orderBy: { createdAt: 'desc' } });
+  return rows
+    .map((row: { payload: unknown }) => asInterviewRecord(row.payload))
+    .filter((item: InterviewRecord | null): item is InterviewRecord => Boolean(item));
 }
 
-async function listInterviewsFile(): Promise<InterviewRecord[]> {
-  const payload = await readPayload();
-  return payload.interviews.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+export async function getInterview(id: string): Promise<InterviewRecord | undefined> {
+  const prisma = getPrismaClient();
+  const row = await prisma.interview.findUnique({ where: { id } });
+  const parsed = asInterviewRecord(row?.payload);
+  return parsed ?? undefined;
 }
 
-async function getInterviewFile(id: string): Promise<InterviewRecord | undefined> {
-  const payload = await readPayload();
-  return payload.interviews.find((entry) => entry.id === id);
+export async function getLatestInterviewByRoom(roomName: string): Promise<InterviewRecord | undefined> {
+  const prisma = getPrismaClient();
+  const row = await prisma.interview.findFirst({
+    where: { roomName },
+    orderBy: { updatedAt: 'desc' },
+  });
+  const parsed = asInterviewRecord(row?.payload);
+  return parsed ?? undefined;
 }
 
-async function getLatestInterviewByRoomFile(roomName: string): Promise<InterviewRecord | undefined> {
-  const target = String(roomName || '').trim().toLowerCase();
-  if (!target) return undefined;
-  const payload = await readPayload();
-  return payload.interviews
-    .filter((entry) => String(entry.roomName || '').trim().toLowerCase() === target)
-    .sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)))[0];
-}
-
-async function createInterviewFile(input: InterviewCreateInput): Promise<InterviewRecord> {
-  const payload = await readPayload();
+export async function createInterview(input: InterviewCreateInput): Promise<InterviewRecord> {
+  const prisma = getPrismaClient();
   const now = new Date().toISOString();
   const interview: InterviewRecord = {
     id: randomUUID(),
@@ -271,163 +217,43 @@ async function createInterviewFile(input: InterviewCreateInput): Promise<Intervi
     createdAt: now,
     updatedAt: now,
   };
-  payload.interviews.push(interview);
-  await writePayload(payload);
+  await prisma.interview.create({
+    data: {
+      id: interview.id,
+      roomName: interview.roomName,
+      candidateName: interview.candidateName,
+      status: interview.status,
+      agentType: interview.agentType,
+      createdAt: new Date(interview.createdAt),
+      updatedAt: new Date(interview.updatedAt),
+      payload: interview,
+    },
+  });
   return interview;
 }
 
-async function updateInterviewFile(id: string, updates: InterviewUpdateInput): Promise<InterviewRecord> {
-  const payload = await readPayload();
-  const index = payload.interviews.findIndex((entry) => entry.id === id);
-  if (index < 0) {
-    throw new Error('Interview not found');
-  }
-  const current = payload.interviews[index];
+export async function updateInterview(id: string, updates: InterviewUpdateInput): Promise<InterviewRecord> {
+  const prisma = getPrismaClient();
+  const row = await prisma.interview.findUnique({ where: { id } });
+  const current = asInterviewRecord(row?.payload);
+  if (!current) throw new Error('Interview not found');
   const next: InterviewRecord = {
     ...current,
     ...updates,
     updatedAt: new Date().toISOString(),
   };
-  payload.interviews[index] = next;
-  await writePayload(payload);
+  await prisma.interview.update({
+    where: { id },
+    data: {
+      roomName: next.roomName,
+      candidateName: next.candidateName,
+      status: next.status,
+      agentType: next.agentType,
+      updatedAt: new Date(next.updatedAt),
+      payload: next,
+    },
+  });
   return next;
-}
-
-async function deleteInterviewFile(id: string): Promise<boolean> {
-  const payload = await readPayload();
-  const index = payload.interviews.findIndex((entry) => entry.id === id);
-  if (index < 0) return false;
-  const target = payload.interviews[index];
-
-  for (const kind of ['cv', 'jd'] as const) {
-    const meta = target[kind];
-    if (!meta?.storedName) continue;
-    const filePath = path.join(uploadsDir, meta.storedName);
-    await unlink(filePath).catch(() => undefined);
-  }
-
-  payload.interviews.splice(index, 1);
-  await writePayload(payload);
-  return true;
-}
-
-export async function listInterviews(): Promise<InterviewRecord[]> {
-  await bootstrapFromFileIfNeeded();
-  const prisma = getPrismaClient();
-  if (!prisma) return listInterviewsFile();
-  try {
-    const rows = await prisma.interview.findMany({ orderBy: { createdAt: 'desc' } });
-    return rows
-      .map((row: { payload: unknown }) => asInterviewRecord(row.payload))
-      .filter((item: InterviewRecord | null): item is InterviewRecord => Boolean(item));
-  } catch {
-    return listInterviewsFile();
-  }
-}
-
-export async function getInterview(id: string): Promise<InterviewRecord | undefined> {
-  await bootstrapFromFileIfNeeded();
-  const prisma = getPrismaClient();
-  if (!prisma) return getInterviewFile(id);
-  try {
-    const row = await prisma.interview.findUnique({ where: { id } });
-    const parsed = asInterviewRecord(row?.payload);
-    return parsed ?? undefined;
-  } catch {
-    return getInterviewFile(id);
-  }
-}
-
-export async function getLatestInterviewByRoom(roomName: string): Promise<InterviewRecord | undefined> {
-  await bootstrapFromFileIfNeeded();
-  const prisma = getPrismaClient();
-  if (!prisma) return getLatestInterviewByRoomFile(roomName);
-  try {
-    const row = await prisma.interview.findFirst({
-      where: { roomName },
-      orderBy: { updatedAt: 'desc' },
-    });
-    const parsed = asInterviewRecord(row?.payload);
-    return parsed ?? undefined;
-  } catch {
-    return getLatestInterviewByRoomFile(roomName);
-  }
-}
-
-export async function createInterview(input: InterviewCreateInput): Promise<InterviewRecord> {
-  await bootstrapFromFileIfNeeded();
-  const prisma = getPrismaClient();
-  if (!prisma) return createInterviewFile(input);
-  try {
-    const now = new Date().toISOString();
-    const interview: InterviewRecord = {
-      id: randomUUID(),
-      status: 'scheduled',
-      roomName: input.roomName,
-      candidateName: input.candidateName,
-      candidateEmail: input.candidateEmail,
-      interviewerName: input.interviewerName,
-      interviewerEmail: input.interviewerEmail,
-      jobTitle: input.jobTitle,
-      jobDepartment: input.jobDepartment,
-      scheduledAt: input.scheduledAt,
-      durationMinutes: input.durationMinutes,
-      timezone: input.timezone,
-      notes: input.notes,
-      agentType: input.agentType === 'realtime_screening' ? 'realtime_screening' : 'classic',
-      candidateContext: input.candidateContext,
-      roleContext: input.roleContext,
-      positionId: input.positionId,
-      positionSnapshot: input.positionSnapshot,
-      createdAt: now,
-      updatedAt: now,
-    };
-    await prisma.interview.create({
-      data: {
-        id: interview.id,
-        roomName: interview.roomName,
-        candidateName: interview.candidateName,
-        status: interview.status,
-        agentType: interview.agentType,
-        createdAt: new Date(interview.createdAt),
-        updatedAt: new Date(interview.updatedAt),
-        payload: interview,
-      },
-    });
-    return interview;
-  } catch {
-    return createInterviewFile(input);
-  }
-}
-
-export async function updateInterview(id: string, updates: InterviewUpdateInput): Promise<InterviewRecord> {
-  await bootstrapFromFileIfNeeded();
-  const prisma = getPrismaClient();
-  if (!prisma) return updateInterviewFile(id, updates);
-  try {
-    const row = await prisma.interview.findUnique({ where: { id } });
-    const current = asInterviewRecord(row?.payload);
-    if (!current) throw new Error('Interview not found');
-    const next: InterviewRecord = {
-      ...current,
-      ...updates,
-      updatedAt: new Date().toISOString(),
-    };
-    await prisma.interview.update({
-      where: { id },
-      data: {
-        roomName: next.roomName,
-        candidateName: next.candidateName,
-        status: next.status,
-        agentType: next.agentType,
-        updatedAt: new Date(next.updatedAt),
-        payload: next,
-      },
-    });
-    return next;
-  } catch {
-    return updateInterviewFile(id, updates);
-  }
 }
 
 export async function attachInterviewAsset(
@@ -484,7 +310,6 @@ export async function resolveInterviewAsset(
 }
 
 export async function deleteInterview(id: string): Promise<boolean> {
-  await bootstrapFromFileIfNeeded();
   const current = await getInterview(id);
   if (!current) return false;
 
@@ -496,11 +321,6 @@ export async function deleteInterview(id: string): Promise<boolean> {
   }
 
   const prisma = getPrismaClient();
-  if (!prisma) return deleteInterviewFile(id);
-  try {
-    await prisma.interview.delete({ where: { id } });
-    return true;
-  } catch {
-    return deleteInterviewFile(id);
-  }
+  await prisma.interview.delete({ where: { id } });
+  return true;
 }

@@ -1,6 +1,3 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
 import { getPrismaClient } from '@/lib/server/prismaClient';
 
 export const DEFAULT_CLASSIC_AGENT_PROMPT = [
@@ -58,12 +55,7 @@ export type AgentPromptSettings = {
   updatedAt: string;
 };
 
-const baseDir =
-  process.env.INTERVIEW_DATA_DIR ?? path.join(os.homedir(), '.bristlecone-data', 'interviews');
-const settingsPath = path.join(baseDir, 'agent-settings.json');
-
 type AgentPromptSettingsPayload = Partial<AgentPromptSettings>;
-let bootstrapped = false;
 
 function sanitizePrompt(value: string, fallback: string): string {
   const compact = String(value || '').replace(/\r/g, '\n').trim();
@@ -75,10 +67,6 @@ function sanitizeNumber(value: unknown, fallback: number, min: number, max: numb
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
   return Math.max(min, Math.min(max, n));
-}
-
-async function ensureStoreDir() {
-  await mkdir(baseDir, { recursive: true });
 }
 
 function normalizeSettings(input?: AgentPromptSettingsPayload): AgentPromptSettings {
@@ -97,54 +85,11 @@ function normalizeSettings(input?: AgentPromptSettingsPayload): AgentPromptSetti
   };
 }
 
-async function readFileSettings(): Promise<AgentPromptSettings> {
-  await ensureStoreDir();
-  try {
-    const raw = await readFile(settingsPath, 'utf8');
-    const parsed = JSON.parse(raw) as AgentPromptSettingsPayload;
-    return normalizeSettings(parsed);
-  } catch {
-    return normalizeSettings();
-  }
-}
-
-async function writeFileSettings(next: AgentPromptSettings): Promise<void> {
-  await ensureStoreDir();
-  await writeFile(settingsPath, JSON.stringify(next, null, 2), 'utf8');
-}
-
-async function bootstrapFromFileIfNeeded() {
-  if (bootstrapped) return;
-  bootstrapped = true;
-  const prisma = getPrismaClient();
-  if (!prisma) return;
-  try {
-    const existing = await prisma.agentSetting.findUnique({ where: { id: 1 } });
-    if (existing) return;
-    const fileSettings = await readFileSettings();
-    await prisma.agentSetting.create({
-      data: {
-        id: 1,
-        payload: fileSettings,
-        updatedAt: new Date(fileSettings.updatedAt),
-      },
-    });
-  } catch (error) {
-    console.warn('[storage] agent settings bootstrap fallback to file store:', error);
-  }
-}
-
 export async function getAgentPromptSettings(): Promise<AgentPromptSettings> {
-  await bootstrapFromFileIfNeeded();
   const prisma = getPrismaClient();
-  if (!prisma) return readFileSettings();
-  try {
-    const row = await prisma.agentSetting.findUnique({ where: { id: 1 } });
-    if (!row) return normalizeSettings();
-    return normalizeSettings(row.payload as AgentPromptSettingsPayload);
-  } catch {
-    return readFileSettings();
-  }
+  const row = await prisma.agentSetting.findUnique({ where: { id: 1 } });
+  if (!row) return normalizeSettings();
+  return normalizeSettings(row.payload as AgentPromptSettingsPayload);
 }
 
 export async function updateAgentPromptSettings(
@@ -205,19 +150,10 @@ export async function updateAgentPromptSettings(
   };
 
   const prisma = getPrismaClient();
-  if (!prisma) {
-    await writeFileSettings(next);
-    return next;
-  }
-  try {
-    await prisma.agentSetting.upsert({
-      where: { id: 1 },
-      create: { id: 1, payload: next, updatedAt: new Date(next.updatedAt) },
-      update: { payload: next, updatedAt: new Date(next.updatedAt) },
-    });
-    return next;
-  } catch {
-    await writeFileSettings(next);
-    return next;
-  }
+  await prisma.agentSetting.upsert({
+    where: { id: 1 },
+    create: { id: 1, payload: next, updatedAt: new Date(next.updatedAt) },
+    update: { payload: next, updatedAt: new Date(next.updatedAt) },
+  });
+  return next;
 }
