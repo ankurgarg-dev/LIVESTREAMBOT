@@ -3,24 +3,21 @@
 import React from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  ARCHETYPES,
   DEEP_DIVE_MODES,
   DURATIONS,
   EVALUATION_POLICIES,
   FOCUS_AREAS,
-  INTERVIEW_ROUND_TYPES,
   LEVELS,
-  ROLE_FAMILIES,
   STRICTNESS_LEVELS,
   type PositionConfigCore,
 } from '@/lib/position/types';
 import { applyDeterministicMapping } from '@/lib/position/logic';
-import commonSkillTags from '@/master_data/common_skill_tags.json';
 import styles from './page.module.css';
 
 type PrefillApiResponse = {
   ok: boolean;
   error?: string;
+  jdTextUsed?: string;
   rawExtraction: unknown;
   normalizedPrefill: PositionConfigCore;
   extractionConfidence: number;
@@ -31,6 +28,7 @@ type PrefillApiResponse = {
 
 type PositionRecord = PositionConfigCore & {
   position_id: string;
+  jd_text?: string;
   normalized_prefill: PositionConfigCore;
   extraction_confidence: number;
   missing_fields: string[];
@@ -41,25 +39,6 @@ type PositionRecord = PositionConfigCore & {
 };
 
 const SUPPORTED_JD_FILE_PATTERN = /\.(txt|md|json|csv|doc|docx|pdf)$/i;
-const COMMON_SKILL_SUGGESTIONS = (commonSkillTags as Array<{ canonical: string }>).map((s) => s.canonical);
-
-const ROLE_FAMILY_LABELS: Record<string, string> = {
-  full_stack: 'Full Stack',
-  backend: 'Backend',
-  frontend: 'Frontend',
-  data: 'Data Engineering',
-  machine_learning: 'ML / GenAI',
-  devops: 'DevOps / SRE',
-  qa: 'QA Automation',
-  mobile: 'Mobile',
-  security: 'Security',
-};
-
-const ROUND_TYPE_LABELS: Record<string, string> = {
-  screening: 'Screening',
-  standard: 'Standard',
-  deep_dive: 'Deep Dive',
-};
 
 const DEEP_DIVE_LABELS: Record<string, string> = {
   none: 'None',
@@ -92,10 +71,7 @@ function humanize(value: string): string {
 function emptyConfig(): PositionConfigCore {
   return {
     role_title: '',
-    role_family: 'full_stack',
     level: 'mid',
-    interview_round_type: 'standard',
-    archetype_id: 'full_stack_general',
     duration_minutes: 60,
     must_haves: [],
     nice_to_haves: [],
@@ -216,7 +192,7 @@ export default function NewPositionPage() {
     });
   }, [loadPositions]);
 
-  const runPrefill = async () => {
+  const runPrefill = async (selectedFile?: File | null) => {
     setLoading(true);
     setError('');
     setSuccess('');
@@ -224,15 +200,20 @@ export default function NewPositionPage() {
       const form = new FormData();
       form.set('roleTitle', roleTitle);
       form.set('jdText', jdText);
-      if (jdFile) form.set('jdFile', jdFile);
+      const fileForPrefill = selectedFile ?? jdFile;
+      if (fileForPrefill) form.set('jdFile', fileForPrefill);
 
       const response = await fetch('/api/positions/prefill', { method: 'POST', body: form });
       const json = (await response.json()) as PrefillApiResponse;
       if (!response.ok || !json.ok) throw new Error(json.error || 'Failed to prefill');
 
+      if (json.jdTextUsed) setJdText(json.jdTextUsed);
       setRawExtraction(json.rawExtraction);
       setPrefill(json.normalizedPrefill);
       setFinalConfig(json.normalizedPrefill);
+      if (!roleTitle.trim() && json.normalizedPrefill.role_title) {
+        setRoleTitle(json.normalizedPrefill.role_title);
+      }
       setEditingPositionId('');
       setMissingFields(json.missingFields || []);
       setWarnings(json.warnings || []);
@@ -246,12 +227,12 @@ export default function NewPositionPage() {
     }
   };
 
-  const onRoleOrLevelChange = (patch: Partial<PositionConfigCore>) => {
+  const onLevelChange = (level: PositionConfigCore['level']) => {
+    const patch: Partial<PositionConfigCore> = { level };
     const next = { ...finalConfig, ...patch };
     const mapped = applyDeterministicMapping(next);
     setFinalConfig({
       ...next,
-      archetype_id: mapped.archetype_id,
       duration_minutes: mapped.duration_minutes,
     });
   };
@@ -268,6 +249,7 @@ export default function NewPositionPage() {
           rawExtraction,
           normalizedPrefill: prefill,
           finalConfig,
+          jdText,
           extractionConfidence: confidence,
           missingFields,
           createdBy,
@@ -306,12 +288,11 @@ export default function NewPositionPage() {
   const startEdit = (position: PositionRecord) => {
     setEditingPositionId(position.position_id);
     setPrefill(position.normalized_prefill);
+    setJdText(position.jd_text || '');
+    setRoleTitle(position.role_title || '');
     setFinalConfig({
       role_title: position.role_title,
-      role_family: position.role_family,
       level: position.level,
-      interview_round_type: position.interview_round_type,
-      archetype_id: position.archetype_id,
       duration_minutes: position.duration_minutes,
       must_haves: position.must_haves,
       nice_to_haves: position.nice_to_haves,
@@ -349,6 +330,7 @@ export default function NewPositionPage() {
     }
     setError('');
     setJdFile(file);
+    void runPrefill(file);
   };
 
   return (
@@ -381,7 +363,7 @@ export default function NewPositionPage() {
         {jdFile ? <p className={styles.subtle}>{`Selected file: ${jdFile.name}`}</p> : null}
         <p className={styles.subtle}>Supported upload formats: .txt, .md, .json, .csv, .doc, .docx, .pdf (or paste JD text).</p>
         <div className={styles.row}>
-          <button type="button" className="lk-button" onClick={runPrefill} disabled={loading}>
+          <button type="button" className="lk-button" onClick={() => void runPrefill()} disabled={loading}>
             {loading ? 'Prefilling...' : 'Prefill from JD'}
           </button>
           <button type="button" className="lk-button" onClick={startNew}>
@@ -398,8 +380,7 @@ export default function NewPositionPage() {
             <div key={position.position_id} className={styles.card}>
               <strong>{position.role_title}</strong>
               <p className={styles.subtle}>
-                {position.role_family} / {position.level} / {position.interview_round_type} / {position.duration_minutes}
-                m
+                {position.level} / {position.duration_minutes}m
               </p>
               <p className={styles.subtle}>
                 Updated: {new Date(position.updated_at).toLocaleString()} | v{position.version}
@@ -437,7 +418,7 @@ export default function NewPositionPage() {
             </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Experience Level</span>
-              <select value={finalConfig.level} onChange={(e) => onRoleOrLevelChange({ level: e.target.value as PositionConfigCore['level'] })}>
+              <select value={finalConfig.level} onChange={(e) => onLevelChange(e.target.value as PositionConfigCore['level'])}>
                 {LEVELS.map((v) => (
                   <option key={v} value={v}>
                     {humanize(v)}
@@ -448,39 +429,6 @@ export default function NewPositionPage() {
           </div>
 
           <div className={styles.grid3}>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Role Family</span>
-              <select value={finalConfig.role_family} onChange={(e) => onRoleOrLevelChange({ role_family: e.target.value as PositionConfigCore['role_family'] })}>
-                {ROLE_FAMILIES.map((v) => (
-                  <option key={v} value={v}>
-                    {ROLE_FAMILY_LABELS[v] || humanize(v)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Interview Round Type</span>
-              <select
-                value={finalConfig.interview_round_type}
-                onChange={(e) => setFinalConfig((prev) => ({ ...prev, interview_round_type: e.target.value as PositionConfigCore['interview_round_type'] }))}
-              >
-                {INTERVIEW_ROUND_TYPES.map((v) => (
-                  <option key={v} value={v}>
-                    {ROUND_TYPE_LABELS[v] || humanize(v)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>Question Archetype</span>
-              <select value={finalConfig.archetype_id} onChange={(e) => setFinalConfig((prev) => ({ ...prev, archetype_id: e.target.value as PositionConfigCore['archetype_id'] }))}>
-                {ARCHETYPES.map((v) => (
-                  <option key={v} value={v}>
-                    {humanize(v)}
-                  </option>
-                ))}
-              </select>
-            </label>
             <label className={styles.field}>
               <span className={styles.fieldLabel}>Duration (Minutes)</span>
               <select
@@ -537,21 +485,18 @@ export default function NewPositionPage() {
             values={finalConfig.must_haves}
             onChange={(next) => setFinalConfig((prev) => ({ ...prev, must_haves: next.slice(0, 8) }))}
             placeholder="Add must-have skill"
-            suggestions={COMMON_SKILL_SUGGESTIONS}
           />
           <TagInput
             label="Nice to haves"
             values={finalConfig.nice_to_haves}
             onChange={(next) => setFinalConfig((prev) => ({ ...prev, nice_to_haves: next.slice(0, 8) }))}
             placeholder="Add nice-to-have skill"
-            suggestions={COMMON_SKILL_SUGGESTIONS}
           />
           <TagInput
             label="Tech stack"
             values={finalConfig.tech_stack}
             onChange={(next) => setFinalConfig((prev) => ({ ...prev, tech_stack: next.slice(0, 15) }))}
             placeholder="Add tech"
-            suggestions={COMMON_SKILL_SUGGESTIONS}
           />
           <TagInput
             label="Focus areas"

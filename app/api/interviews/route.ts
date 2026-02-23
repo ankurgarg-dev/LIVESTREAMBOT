@@ -41,10 +41,7 @@ function parsePositionSnapshot(raw: FormDataEntryValue | null): InterviewPositio
     if (!parsed || typeof parsed !== 'object') return undefined;
     return {
       role_title: String(parsed.role_title || '').trim(),
-      role_family: String(parsed.role_family || '').trim(),
       level: String(parsed.level || '').trim(),
-      interview_round_type: String(parsed.interview_round_type || '').trim(),
-      archetype_id: String(parsed.archetype_id || '').trim(),
       duration_minutes: Number(parsed.duration_minutes || 0),
       must_haves: Array.isArray(parsed.must_haves) ? parsed.must_haves.map(String) : [],
       nice_to_haves: Array.isArray(parsed.nice_to_haves) ? parsed.nice_to_haves.map(String) : [],

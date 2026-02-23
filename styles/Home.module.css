@@ -69,8 +69,8 @@
   position: relative;
   min-height: 260px;
   display: grid;
-  place-items: center;
-  padding: 1rem;
+  place-items: start end;
+  padding: 0.35rem 0.2rem 1rem 1rem;
   z-index: 1;
 }
 
@@ -88,12 +88,13 @@
 }
 
 .heroRingOuter {
-  width: min(420px, 78%);
+  width: min(500px, 92%);
   aspect-ratio: 1;
   border-radius: 50%;
   padding: 11px;
   background: linear-gradient(160deg, rgba(46, 178, 210, 0.95), rgba(91, 194, 164, 0.95));
   box-shadow: 0 20px 34px rgba(22, 66, 94, 0.24);
+  transform: translate(4%, -10%);
 }
 
 .heroRingInner {
@@ -109,8 +110,15 @@
   width: 94%;
   height: 94%;
   border-radius: 50%;
-  background:
-    radial-gradient(circle at 27% 28%, rgba(48, 215, 225, 0.9) 0 10%, rgba(13, 175, 209, 0.95) 28%, rgba(16, 116, 184, 0.96) 66%, rgba(9, 79, 138, 0.96) 100%);
+  overflow: hidden;
+  background: radial-gradient(100% 100% at 50% 18%, rgba(60, 197, 224, 0.22), rgba(24, 87, 168, 0.22));
+}
+
+.heroOrbImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .tabContainer {
@@ -381,7 +389,8 @@
   }
 
   .heroRingOuter {
-    width: min(300px, 60vw);
+    width: min(360px, 72vw);
+    transform: translate(0, -8%);
   }
 
   .scoreSummaryGrid {

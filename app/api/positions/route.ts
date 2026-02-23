@@ -19,6 +19,7 @@ export async function POST(req: NextRequest) {
       rawExtraction: unknown;
       normalizedPrefill: PositionConfigCore;
       finalConfig: PositionConfigCore;
+      jdText?: string;
       extractionConfidence: number;
       missingFields: string[];
       createdBy?: string;
@@ -31,6 +32,7 @@ export async function POST(req: NextRequest) {
     const created = await createPosition({
       finalConfig: finalMapped,
       normalizedPrefill: prefillMapped,
+      jdText: String(body.jdText || ''),
       rawExtraction: body.rawExtraction,
       extractionConfidence: Number(body.extractionConfidence || 0),
       missingFields: Array.isArray(body.missingFields) ? body.missingFields : [],

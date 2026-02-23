@@ -20,6 +20,7 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
     const { id } = await context.params;
     const body = (await req.json()) as {
       finalConfig: PositionConfigCore;
+      jdText?: string;
       updatedBy?: string;
     };
 
@@ -32,6 +33,7 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
 
     const updated = await updatePosition(id, {
       finalConfig: finalMapped,
+      jdText: typeof body.jdText === 'string' ? body.jdText : current.jd_text,
       moderatorOverridesDiff: diff,
       extractionConfidence: current.extraction_confidence,
       missingFields: current.missing_fields,

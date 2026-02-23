@@ -3,14 +3,11 @@
 import { useRouter } from 'next/navigation';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  ARCHETYPES,
   DEEP_DIVE_MODES,
   DURATIONS,
   EVALUATION_POLICIES,
   FOCUS_AREAS,
-  INTERVIEW_ROUND_TYPES,
   LEVELS,
-  ROLE_FAMILIES,
   STRICTNESS_LEVELS,
   type PositionConfigCore,
 } from '@/lib/position/types';
@@ -253,10 +250,7 @@ function interviewRecencyTimestamp(interview: InterviewRecord): number {
 function clonePosition(position: PositionRecord | PositionConfigCore): PositionConfigCore {
   return {
     role_title: position.role_title,
-    role_family: position.role_family,
     level: position.level,
-    interview_round_type: position.interview_round_type,
-    archetype_id: position.archetype_id,
     duration_minutes: position.duration_minutes,
     must_haves: [...position.must_haves],
     nice_to_haves: [...position.nice_to_haves],
@@ -835,7 +829,9 @@ export default function Page() {
           <aside className={styles.heroVisual} aria-hidden="true">
             <div className={styles.heroRingOuter}>
               <div className={styles.heroRingInner}>
-                <div className={styles.heroOrb} />
+                <div className={styles.heroOrb}>
+                  <img src="/images/chameleon.png" alt="" className={styles.heroOrbImage} />
+                </div>
               </div>
             </div>
           </aside>
@@ -933,7 +929,7 @@ export default function Page() {
                   <select value={selectedPositionId} onChange={(e) => setSelectedPositionId(e.target.value)}>
                     {positions.map((p) => (
                       <option key={p.position_id} value={p.position_id}>
-                        {p.role_title} ({p.role_family}/{p.level})
+                        {p.role_title} ({p.level})
                       </option>
                     ))}
                   </select>
@@ -959,7 +955,7 @@ export default function Page() {
                         <div className={styles.reportPanel}>
                           <h4 style={{ marginTop: 0 }}>{positionDraft.role_title}</h4>
                           <p className={styles.interviewMeta}>{positionDraft.notes_for_interviewer || 'No JD notes saved for this position.'}</p>
-                          <p className={styles.interviewMeta}>{`Role family: ${positionDraft.role_family} | Level: ${positionDraft.level}`}</p>
+                          <p className={styles.interviewMeta}>{`Level: ${positionDraft.level}`}</p>
                           <p className={styles.interviewMeta}>
                             {`Must-haves: ${positionDraft.must_haves.join(', ') || 'None'} | Nice-to-haves: ${
                               positionDraft.nice_to_haves.join(', ') || 'None'
@@ -983,7 +979,7 @@ export default function Page() {
 
                       {positionsTab === 'plan' ? (
                         <div className={styles.reportPanel}>
-                          <p className={styles.interviewMeta}>{`Round: ${positionDraft.interview_round_type} | Archetype: ${positionDraft.archetype_id} | Duration: ${positionDraft.duration_minutes}m`}</p>
+                          <p className={styles.interviewMeta}>{`Duration: ${positionDraft.duration_minutes}m`}</p>
                           <p className={styles.interviewMeta}>{`Focus areas: ${positionDraft.focus_areas.join(', ') || 'None'}`}</p>
                           <p className={styles.interviewMeta}>{`Scorecard policy: ${positionDraft.evaluation_policy} | Strictness: ${positionDraft.strictness}`}</p>
                           <p className={styles.interviewMeta}>{`Question sets / must-haves: ${positionDraft.must_haves.join(', ') || 'None'}`}</p>
@@ -1092,7 +1088,7 @@ export default function Page() {
                     <option value="">Select Open Position</option>
                     {positions.map((position) => (
                       <option key={position.position_id} value={position.position_id}>
-                        {position.role_title} ({position.role_family}/{position.level})
+                        {position.role_title} ({position.level})
                       </option>
                     ))}
                   </select>
@@ -1170,23 +1166,6 @@ export default function Page() {
                       />
                     </label>
                     <label className={styles.formField}>
-                      <span className={styles.formFieldLabel}>Role Family</span>
-                      <select
-                        value={positionDraft.role_family}
-                        onChange={(e) =>
-                          setPositionDraft((prev) =>
-                            prev ? { ...prev, role_family: e.target.value as PositionConfigCore['role_family'] } : prev,
-                          )
-                        }
-                      >
-                        {ROLE_FAMILIES.map((v) => (
-                          <option key={v} value={v}>
-                            {v}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className={styles.formField}>
                       <span className={styles.formFieldLabel}>Level</span>
                       <select
                         value={positionDraft.level}
@@ -1197,45 +1176,6 @@ export default function Page() {
                         }
                       >
                         {LEVELS.map((v) => (
-                          <option key={v} value={v}>
-                            {v}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className={styles.formField}>
-                      <span className={styles.formFieldLabel}>Interview Round Type</span>
-                      <select
-                        value={positionDraft.interview_round_type}
-                        onChange={(e) =>
-                          setPositionDraft((prev) =>
-                            prev
-                              ? {
-                                  ...prev,
-                                  interview_round_type: e.target.value as PositionConfigCore['interview_round_type'],
-                                }
-                              : prev,
-                          )
-                        }
-                      >
-                        {INTERVIEW_ROUND_TYPES.map((v) => (
-                          <option key={v} value={v}>
-                            {v}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className={styles.formField}>
-                      <span className={styles.formFieldLabel}>Archetype</span>
-                      <select
-                        value={positionDraft.archetype_id}
-                        onChange={(e) =>
-                          setPositionDraft((prev) =>
-                            prev ? { ...prev, archetype_id: e.target.value as PositionConfigCore['archetype_id'] } : prev,
-                          )
-                        }
-                      >
-                        {ARCHETYPES.map((v) => (
                           <option key={v} value={v}>
                             {v}
                           </option>

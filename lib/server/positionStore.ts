@@ -2,9 +2,41 @@ import { randomUUID } from 'crypto';
 import type { PositionConfigCore, PositionConfigRecord } from '@/lib/position/types';
 import { getPrismaClient } from '@/lib/server/prismaClient';
 
+function sanitizePositionCore(value: unknown): PositionConfigCore {
+  const typed = (value || {}) as Partial<PositionConfigCore> & {
+    role_family?: unknown;
+    interview_round_type?: unknown;
+    archetype_id?: unknown;
+  };
+  return {
+    role_title: String(typed.role_title || '').trim(),
+    level: String(typed.level || 'mid').trim() as PositionConfigCore['level'],
+    duration_minutes: Number(typed.duration_minutes || 60) as PositionConfigCore['duration_minutes'],
+    must_haves: Array.isArray(typed.must_haves) ? typed.must_haves.map(String) : [],
+    nice_to_haves: Array.isArray(typed.nice_to_haves) ? typed.nice_to_haves.map(String) : [],
+    tech_stack: Array.isArray(typed.tech_stack) ? typed.tech_stack.map(String) : [],
+    focus_areas: Array.isArray(typed.focus_areas) ? typed.focus_areas.map(String) as PositionConfigCore['focus_areas'] : [],
+    deep_dive_mode: String(typed.deep_dive_mode || 'none').trim() as PositionConfigCore['deep_dive_mode'],
+    strictness: String(typed.strictness || 'balanced').trim() as PositionConfigCore['strictness'],
+    evaluation_policy: String(typed.evaluation_policy || 'holistic').trim() as PositionConfigCore['evaluation_policy'],
+    notes_for_interviewer: String(typed.notes_for_interviewer || '').slice(0, 600),
+    skills_calibration: Array.isArray(typed.skills_calibration) ? typed.skills_calibration : [],
+  };
+}
+
 function clonePosition(value: unknown): PositionConfigRecord | null {
   if (!value || typeof value !== 'object') return null;
-  return value as PositionConfigRecord;
+  const typed = value as PositionConfigRecord & {
+    normalized_prefill?: unknown;
+  };
+  const finalConfig = sanitizePositionCore(typed);
+  const normalizedPrefill = sanitizePositionCore(typed.normalized_prefill || typed);
+  return {
+    ...typed,
+    ...finalConfig,
+    jd_text: typeof typed.jd_text === 'string' ? typed.jd_text : '',
+    normalized_prefill: normalizedPrefill,
+  };
 }
 
 export async function listPositions(): Promise<PositionConfigRecord[]> {
@@ -25,6 +57,7 @@ export async function getPosition(id: string): Promise<PositionConfigRecord | un
 export async function createPosition(input: {
   finalConfig: PositionConfigCore;
   normalizedPrefill: PositionConfigCore;
+  jdText?: string;
   rawExtraction: unknown;
   extractionConfidence: number;
   missingFields: string[];
@@ -33,11 +66,14 @@ export async function createPosition(input: {
 }): Promise<PositionConfigRecord> {
   const prisma = getPrismaClient();
   const now = new Date().toISOString();
+  const sanitizedFinal = sanitizePositionCore(input.finalConfig);
+  const sanitizedPrefill = sanitizePositionCore(input.normalizedPrefill);
   const record: PositionConfigRecord = {
     position_id: randomUUID(),
-    ...input.finalConfig,
+    ...sanitizedFinal,
+    jd_text: String(input.jdText || '').trim(),
     extracted_from_jd_raw: input.rawExtraction,
-    normalized_prefill: input.normalizedPrefill,
+    normalized_prefill: sanitizedPrefill,
     extraction_confidence: input.extractionConfidence,
     missing_fields: input.missingFields,
     moderator_overrides_diff: input.moderatorOverridesDiff,
@@ -63,6 +99,7 @@ export async function updatePosition(
   input: {
     finalConfig: PositionConfigCore;
     moderatorOverridesDiff: unknown;
+    jdText?: string;
     extractionConfidence?: number;
     missingFields?: string[];
     updatedBy?: string;
@@ -72,9 +109,11 @@ export async function updatePosition(
   const row = await prisma.position.findUnique({ where: { id } });
   const current = clonePosition(row?.payload);
   if (!current) throw new Error('Position not found');
+  const sanitizedFinal = sanitizePositionCore(input.finalConfig);
   const next: PositionConfigRecord = {
     ...current,
-    ...input.finalConfig,
+    ...sanitizedFinal,
+    jd_text: typeof input.jdText === 'string' ? input.jdText.trim() : current.jd_text,
     moderator_overrides_diff: input.moderatorOverridesDiff,
     extraction_confidence:
       typeof input.extractionConfidence === 'number' ? input.extractionConfidence : current.extraction_confidence,

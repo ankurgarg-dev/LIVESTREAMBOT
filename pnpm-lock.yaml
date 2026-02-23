@@ -35,6 +35,9 @@ importers:
       next:
         specifier: 15.2.8
         version: 15.2.8(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      pdf-parse:
+        specifier: ^1.1.1
+        version: 1.1.4
       react:
         specifier: 18.3.1
         version: 18.3.1
@@ -1872,6 +1875,9 @@ packages:
       sass:
         optional: true
 
+  node-ensure@0.0.0:
+    resolution: {integrity: sha512-DRI60hzo2oKN1ma0ckc6nQWlHU69RH6xN0sjQTjMpChPfTYvKZdcQFfdYK2RWbJcKyUizSIy/l8OTGxMAM1QDw==}
+
   node-fetch-native@1.6.7:
     resolution: {integrity: sha512-g9yhqoedzIUm0nTnTqAQvueMPVOuIY16bqgAJJC8XOOubYFNwz6IER9qs0Gq2Xd0+CecCKFjtdDTMA4u4xG06Q==}
 
@@ -1955,6 +1961,10 @@ packages:
   pathval@2.0.0:
     resolution: {integrity: sha512-vE7JKRyES09KiunauX7nd2Q9/L7lhok4smP9RZTDeD4MVs72Dp2qNFVz39Nz5a0FVEW0BJR6C0DYrq6unoziZA==}
     engines: {node: '>= 14.16'}
+
+  pdf-parse@1.1.4:
+    resolution: {integrity: sha512-XRIRcLgk6ZnUbsHsYXExMw+krrPE81hJ6FQPLdBNhhBefqIQKXu/WeTgNBGSwPrfU0v+UCEwn7AoAUOsVKHFvQ==}
+    engines: {node: '>=6.8.1'}
 
   perfect-debounce@1.0.0:
     resolution: {integrity: sha512-xCy9V055GLEqoFaHoC1SoLIaLmWctgCUaBaWxDZ7/Zx4CTyX7cJQLJOok/orfjZAh9kEYpjJa4d0KcJmCbctZA==}
@@ -4386,6 +4396,8 @@ snapshots:
       - '@babel/core'
       - babel-plugin-macros
 
+  node-ensure@0.0.0: {}
+
   node-fetch-native@1.6.7: {}
 
   node-releases@2.0.25: {}
@@ -4471,6 +4483,10 @@ snapshots:
   pathe@2.0.3: {}
 
   pathval@2.0.0: {}
+
+  pdf-parse@1.1.4:
+    dependencies:
+      node-ensure: 0.0.0
 
   perfect-debounce@1.0.0: {}
 

@@ -8,44 +8,29 @@ import type {
   DeepDiveMode,
   EvaluationPolicy,
   FocusArea,
-  InterviewRoundType,
   Level,
   PositionExtraction,
   PrefillResult,
-  RoleFamily,
   Strictness,
 } from '@/lib/position/types';
 
-const ROLE_FAMILY_KEYWORDS: Array<{ role: RoleFamily; words: string[] }> = [
-  { role: 'machine_learning', words: ['machine learning', 'ml engineer', 'genai', 'llm', 'agentic ai', 'mlops', 'pytorch', 'tensorflow'] },
-  { role: 'backend', words: ['backend', 'api', 'microservice', 'distributed system', 'golang', 'java', 'spring boot', 'node.js'] },
-  { role: 'frontend', words: ['frontend', 'ui', 'react', 'next.js', 'javascript', 'typescript', 'css'] },
-  { role: 'data', words: ['data engineer', 'data platform', 'etl', 'warehouse', 'spark', 'databricks', 'airflow', 'snowflake'] },
-  { role: 'devops', words: ['devops', 'sre', 'kubernetes', 'terraform', 'infrastructure', 'observability', 'prometheus', 'grafana'] },
-  { role: 'qa', words: ['qa', 'quality assurance', 'automation testing', 'selenium', 'cypress', 'playwright'] },
-  { role: 'mobile', words: ['android', 'ios', 'swift', 'kotlin', 'mobile app', 'react native', 'flutter'] },
-  { role: 'security', words: ['security', 'appsec', 'threat modeling', 'vulnerability', 'soc', 'iam', 'incident response'] },
-  { role: 'full_stack', words: ['full stack', 'end-to-end', 'frontend and backend', 'web application'] },
-];
-
-function detectRoleFamily(text: string): { value: RoleFamily; confidence: number; rationale: string } {
-  const t = text.toLowerCase();
-  let best: { role: RoleFamily; hits: number; terms: string[] } = { role: 'full_stack', hits: 0, terms: [] };
-  for (const candidate of ROLE_FAMILY_KEYWORDS) {
-    const matched = candidate.words.filter((w) => t.includes(w));
-    if (matched.length > best.hits) {
-      best = { role: candidate.role, hits: matched.length, terms: matched };
-    }
+function inferRoleTitleFromJd(jdText: string): string {
+  const text = String(jdText || '');
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (const line of lines.slice(0, 20)) {
+    const m = line.match(/^\s*(title|job title|position)\s*:\s*(.+)$/i);
+    if (m?.[2]) return m[2].trim().slice(0, 120);
   }
-  if (best.hits >= 1) {
-    const confidence = Math.min(0.92, 0.58 + best.hits * 0.12);
-    return {
-      value: best.role,
-      confidence,
-      rationale: `Detected ${best.role} keywords: ${best.terms.slice(0, 4).join(', ')}.`,
-    };
+  for (const line of lines.slice(0, 30)) {
+    if (/^(about|responsibilities|requirements|what you'll need|must have|nice to have)\b/i.test(line)) continue;
+    if (line.length < 6 || line.length > 90) continue;
+    if (!/(engineer|developer|architect|scientist|manager|lead|specialist|analyst|qa|sre|devops|consultant)/i.test(line)) continue;
+    return line.replace(/^[\-*•\d.)\s]+/, '').trim().slice(0, 120);
   }
-  return { value: 'full_stack', confidence: 0.55, rationale: 'Fallback role family due to weak signal.' };
+  return 'Software Engineer';
 }
 
 function detectLevel(text: string): { value: Level; confidence: number; rationale: string } {
@@ -63,13 +48,6 @@ function detectLevel(text: string): { value: Level; confidence: number; rational
     return { value: 'junior', confidence: 0.8, rationale: 'Detected junior experience signals.' };
   }
   return { value: 'mid', confidence: 0.6, rationale: 'Defaulted to mid level.' };
-}
-
-function inferRoundType(text: string): InterviewRoundType {
-  const t = text.toLowerCase();
-  if (/(deep dive|architecture|system design|production at scale)/.test(t)) return 'deep_dive';
-  if (/(screening|initial screen)/.test(t)) return 'screening';
-  return 'standard';
 }
 
 function inferFocusAreas(text: string): FocusArea[] {
@@ -108,33 +86,9 @@ function inferSkills(text: string): string[] {
   return Array.from(new Set(out));
 }
 
-function roleFamilyToArchetype(roleFamily: RoleFamily): string {
-  switch (roleFamily) {
-    case 'backend':
-      return 'backend_services';
-    case 'frontend':
-      return 'frontend_ui';
-    case 'data':
-      return 'data_platform';
-    case 'machine_learning':
-      return 'ml_genai_engineering';
-    case 'devops':
-      return 'devops_sre';
-    case 'qa':
-      return 'qa_automation';
-    case 'mobile':
-      return 'mobile_app';
-    case 'security':
-      return 'security_engineering';
-    case 'full_stack':
-    default:
-      return 'full_stack_general';
-  }
-}
-
 function fallbackExtraction(roleTitle: string, jdText: string): PositionExtraction {
   const inputText = `${roleTitle}\n${jdText}`.trim();
-  const role = detectRoleFamily(inputText);
+  const inferredRoleTitle = roleTitle || inferRoleTitleFromJd(jdText);
   const level = detectLevel(inputText);
   const focusAreas = inferFocusAreas(inputText);
   const tech = inferSkills(inputText);
@@ -142,7 +96,6 @@ function fallbackExtraction(roleTitle: string, jdText: string): PositionExtracti
     new Set([
       ...tech.slice(0, 5),
       ...(focusAreas.includes('mlops') ? ['MLOps'] : []),
-      ...(focusAreas.includes('genai') ? ['LLMs', 'Agentic AI'] : []),
       ...(focusAreas.includes('leadership') ? ['Technical Leadership'] : []),
       'Problem Solving',
       'Communication',
@@ -155,36 +108,36 @@ function fallbackExtraction(roleTitle: string, jdText: string): PositionExtracti
       ? 'system_design'
       : 'none';
   const strictness: Strictness = level.value === 'lead' || level.value === 'principal' ? 'strict' : 'balanced';
-  const evaluationPolicy: EvaluationPolicy = role.value === 'machine_learning' ? 'bar_raiser' : 'holistic';
+  const evaluationPolicy: EvaluationPolicy = focusAreas.includes('genai') ? 'bar_raiser' : 'holistic';
 
   return {
-    role_title: roleTitle || 'Software Engineer',
-    role_family: role.value,
+    role_title: inferredRoleTitle,
     level: level.value,
-    interview_round_type: inferRoundType(inputText),
-    recommended_archetype_id: roleFamilyToArchetype(role.value),
     recommended_duration_minutes: level.value === 'lead' || level.value === 'principal' ? 90 : 60,
     must_haves: mustHaves.slice(0, 8),
-    nice_to_haves: tech.slice(5, 8),
+    nice_to_haves: Array.from(
+      new Set([
+        ...tech.slice(5, 8),
+        ...(focusAreas.includes('genai') ? ['LLMs', 'Agentic AI'] : []),
+      ]),
+    ).slice(0, 8),
     tech_stack: tech.slice(0, 15),
     focus_areas: focusAreas,
     deep_dive_mode: deepDiveMode,
     strictness,
     evaluation_policy: evaluationPolicy,
     notes_for_interviewer:
-      role.value === 'machine_learning'
+      focusAreas.includes('genai')
         ? 'Probe hands-on ML/GenAI depth, MLOps maturity, and technical leadership in production systems.'
         : 'Review role fundamentals and production readiness.',
     confidence: {
-      role_family: role.confidence,
       level: level.confidence,
       must_haves: mustHaves.length >= 3 ? 0.75 : 0.55,
       tech_stack: tech.length > 0 ? 0.75 : 0.5,
-      overall: Math.min(0.92, (role.confidence + level.confidence) / 2 + 0.05),
+      overall: Math.min(0.92, level.confidence + 0.05),
     },
     missing_fields: [],
     extraction_rationale: {
-      role_family: role.rationale,
       level: level.rationale,
     },
   };
@@ -223,10 +176,7 @@ function coerceExtractionCandidate(input: unknown): PositionExtraction {
 
   return {
     role_title: String(p.role_title || '').trim(),
-    role_family: String(p.role_family || '').trim(),
     level: String(p.level || '').trim(),
-    interview_round_type: String(p.interview_round_type || '').trim(),
-    recommended_archetype_id: String(p.recommended_archetype_id || '').trim(),
     recommended_duration_minutes: Number(p.recommended_duration_minutes || 0),
     must_haves: toStringArray(p.must_haves),
     nice_to_haves: toStringArray(p.nice_to_haves),
@@ -237,7 +187,6 @@ function coerceExtractionCandidate(input: unknown): PositionExtraction {
     evaluation_policy: String(p.evaluation_policy || '').trim(),
     notes_for_interviewer: String(p.notes_for_interviewer || '').slice(0, 600),
     confidence: {
-      role_family: toNumber01(conf.role_family),
       level: toNumber01(conf.level),
       must_haves: toNumber01(conf.must_haves),
       tech_stack: toNumber01(conf.tech_stack),
@@ -245,7 +194,6 @@ function coerceExtractionCandidate(input: unknown): PositionExtraction {
     },
     missing_fields: toStringArray(p.missing_fields),
     extraction_rationale: {
-      role_family: typeof rationale.role_family === 'string' ? rationale.role_family : JSON.stringify(rationale.role_family ?? ''),
       level: typeof rationale.level === 'string' ? rationale.level : JSON.stringify(rationale.level ?? ''),
     },
   };
@@ -310,10 +258,11 @@ export async function extractAndPrefillPosition(input: {
 }): Promise<PrefillResult> {
   const roleTitle = String(input.roleTitle || '').trim();
   const jdText = String(input.jdText || '').trim();
+  const inferredRoleTitle = roleTitle || inferRoleTitleFromJd(jdText);
 
   if (!jdText) {
-    const fallback = fallbackExtraction(roleTitle, jdText);
-    const normalized = normalizeAndMap(fallback, { jdText, roleTitleOverride: roleTitle });
+    const fallback = fallbackExtraction(inferredRoleTitle, jdText);
+    const normalized = normalizeAndMap(fallback, { jdText, roleTitleOverride: roleTitle || inferredRoleTitle });
     return {
       rawExtraction: fallback,
       normalizedPrefill: applyDeterministicMapping(normalized.prefill),
@@ -328,7 +277,7 @@ export async function extractAndPrefillPosition(input: {
   let rawText = '';
 
   try {
-    rawText = await callOpenAIJson(buildPrompt(roleTitle, jdText));
+    rawText = await callOpenAIJson(buildPrompt(roleTitle || inferredRoleTitle, jdText));
     extractionObj = coerceExtractionCandidate(parseJsonWithFallback(rawText));
     let validation = validateExtractionShape(extractionObj);
 
@@ -341,13 +290,12 @@ export async function extractAndPrefillPosition(input: {
       }
     }
   } catch (error) {
-    const fallback = fallbackExtraction(roleTitle, jdText);
-    const normalized = normalizeAndMap(fallback, { jdText, roleTitleOverride: roleTitle });
+    const fallback = fallbackExtraction(inferredRoleTitle, jdText);
+    const normalized = normalizeAndMap(fallback, { jdText, roleTitleOverride: roleTitle || inferredRoleTitle });
     return {
       rawExtraction: {
         ...fallback,
         extraction_rationale: {
-          role_family: `Fallback used: ${error instanceof Error ? error.message : 'Unknown error'}`,
           level: 'Fallback path',
         },
       },
@@ -360,12 +308,9 @@ export async function extractAndPrefillPosition(input: {
   }
 
   const typed = extractionObj as PositionExtraction;
-  const heuristic = fallbackExtraction(roleTitle, jdText);
-  const typedRoleConf = Number(typed.confidence?.role_family || 0);
-  if ((!typed.role_family || typedRoleConf < 0.75) && heuristic.confidence.role_family >= typedRoleConf + 0.1) {
-    typed.role_family = heuristic.role_family;
-    typed.confidence.role_family = heuristic.confidence.role_family;
-    typed.extraction_rationale.role_family = `${typed.extraction_rationale.role_family} | heuristic_applied`;
+  const heuristic = fallbackExtraction(inferredRoleTitle, jdText);
+  if (!typed.role_title || typed.role_title.length < 4) {
+    typed.role_title = inferredRoleTitle;
   }
   if ((!typed.level || typed.confidence?.level < 0.6) && heuristic.confidence.level >= 0.6) {
     typed.level = heuristic.level;
@@ -380,9 +325,6 @@ export async function extractAndPrefillPosition(input: {
     typed.tech_stack = heuristic.tech_stack;
     typed.confidence.tech_stack = Math.max(typed.confidence.tech_stack || 0, heuristic.confidence.tech_stack);
   }
-  if (!typed.recommended_archetype_id) {
-    typed.recommended_archetype_id = roleFamilyToArchetype(typed.role_family as RoleFamily);
-  }
   if (!typed.recommended_duration_minutes || !Number.isFinite(typed.recommended_duration_minutes)) {
     typed.recommended_duration_minutes = heuristic.recommended_duration_minutes;
   }
@@ -390,7 +332,6 @@ export async function extractAndPrefillPosition(input: {
     typed.confidence = heuristic.confidence;
   } else {
     const parts = [
-      Number(typed.confidence.role_family || 0),
       Number(typed.confidence.level || 0),
       Number(typed.confidence.must_haves || 0),
       Number(typed.confidence.tech_stack || 0),
@@ -401,7 +342,7 @@ export async function extractAndPrefillPosition(input: {
     }
   }
 
-  const normalized = normalizeAndMap(typed, { jdText, roleTitleOverride: roleTitle });
+  const normalized = normalizeAndMap(typed, { jdText, roleTitleOverride: roleTitle || inferredRoleTitle });
   const mapped = applyDeterministicMapping(normalized.prefill);
 
   return {
@@ -410,6 +351,6 @@ export async function extractAndPrefillPosition(input: {
     extractionConfidence: normalized.confidence,
     missingFields: normalized.missingFields,
     warnings: normalized.warnings,
-    summary: `${mapped.role_title}: ${mapped.role_family} / ${mapped.level} (${mapped.duration_minutes} mins).`,
+    summary: `${mapped.role_title}: ${mapped.level} (${mapped.duration_minutes} mins).`,
   };
 }

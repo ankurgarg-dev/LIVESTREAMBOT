@@ -1,38 +1,51 @@
-import roleTemplates from '../../master_data/role_templates.json';
-import commonSkillTags from '../../master_data/common_skill_tags.json';
 import {
-  ARCHETYPES,
   DEEP_DIVE_MODES,
   DURATIONS,
   EVALUATION_POLICIES,
   FOCUS_AREAS,
-  INTERVIEW_ROUND_TYPES,
   LEVELS,
-  ROLE_FAMILIES,
   STRICTNESS_LEVELS,
   type PositionConfigCore,
   type PositionExtraction,
-  type RoleFamily,
-  type Level,
   type SkillCalibrationItem,
 } from './types';
-
-type SkillTagAlias = { canonical: string; aliases: string[] };
-
-type RoleTemplateEntry = {
-  archetype_id: string;
-  duration_minutes: number;
-  must_haves: string[];
-  tech_stack?: string[];
-};
-
-type RoleTemplateMap = {
-  default: RoleTemplateEntry;
-  [roleFamily: string]: RoleTemplateEntry | Record<string, RoleTemplateEntry>;
-};
-
-const templates = roleTemplates as RoleTemplateMap;
-const skillAliases = commonSkillTags as SkillTagAlias[];
+const DEFAULT_DURATION = 60;
+const JD_SKILL_PATTERNS: Array<[RegExp, string]> = [
+  [/\bjava\b/i, 'Java'],
+  [/\bj2ee\b|\bjee\b/i, 'J2EE'],
+  [/\bspring\s*boot\b/i, 'Spring Boot'],
+  [/\bobject[-\s]*oriented\b|\bood\b|\boop\b/i, 'Object-Oriented Design'],
+  [/\bdesign patterns?\b/i, 'Design Patterns'],
+  [/\bdata structures?\b/i, 'Data Structures'],
+  [/\bscalab(le|ility)\b|\bsystem architecture\b/i, 'System Design'],
+  [/\bmicro[\s-]*services?\b/i, 'Microservices'],
+  [/\bdistributed computing\b|\bdistributed systems?\b/i, 'Distributed Computing'],
+  [/\brest(ful)?\b|\brest apis?\b/i, 'REST APIs'],
+  [/\bnosql\b/i, 'NoSQL'],
+  [/\bmq\b|\bmessage queue\b/i, 'MQ'],
+  [/\bkafka\b/i, 'Kafka'],
+  [/\bterraform\b|\biac\b|\binfrastructure as code\b/i, 'Terraform'],
+  [/\bci\/?cd\b|\bcontinuous integration\b|\bcontinuous delivery\b|\bcontinuous deployment\b/i, 'CI/CD'],
+  [/\bdocker\b/i, 'Docker'],
+  [/\bkubernetes\b|\bk8s\b/i, 'Kubernetes'],
+  [/\baws\b|\bamazon web services\b|\bcloud\b/i, 'AWS'],
+  [/\bautomation testing\b/i, 'Automation Testing'],
+  [/\bunit testing\b|\bunit test\b/i, 'Unit Testing'],
+  [/\bintegration testing\b|\bintegration test\b/i, 'Integration Testing'],
+  [/\bagile\b/i, 'Agile'],
+  [/\bbatch\b/i, 'Batch Processing'],
+  [/\banalytics?\b/i, 'Analytics Platforms'],
+  [/\bdata platforms?\b/i, 'Data Platforms'],
+  [/\bgenai\b|\bgenerative ai\b/i, 'GenAI'],
+  [/\bllms?\b|\blarge language models?\b/i, 'LLMs'],
+  [/\bagentic ai\b|\bagentic\b/i, 'Agentic AI'],
+];
+const NON_TECH_STACK_SKILLS = new Set([
+  'Problem Solving',
+  'Communication',
+  'Technical Leadership',
+  'Coding Fundamentals',
+]);
 
 function isOneOf<T extends string | number>(value: unknown, source: readonly T[]): value is T {
   return source.includes(value as T);
@@ -51,10 +64,7 @@ export function validateExtractionShape(payload: unknown): { ok: boolean; errors
 
   const required = [
     'role_title',
-    'role_family',
     'level',
-    'interview_round_type',
-    'recommended_archetype_id',
     'recommended_duration_minutes',
     'must_haves',
     'nice_to_haves',
@@ -79,10 +89,7 @@ export function validateExtractionShape(payload: unknown): { ok: boolean; errors
   }
 
   if (typeof p.role_title !== 'string') errors.push('role_title must be string');
-  if (typeof p.role_family !== 'string') errors.push('role_family must be string');
   if (typeof p.level !== 'string') errors.push('level must be string');
-  if (typeof p.interview_round_type !== 'string') errors.push('interview_round_type must be string');
-  if (typeof p.recommended_archetype_id !== 'string') errors.push('recommended_archetype_id must be string');
   if (typeof p.recommended_duration_minutes !== 'number') errors.push('recommended_duration_minutes must be number');
   if (typeof p.deep_dive_mode !== 'string') errors.push('deep_dive_mode must be string');
   if (typeof p.strictness !== 'string') errors.push('strictness must be string');
@@ -93,7 +100,7 @@ export function validateExtractionShape(payload: unknown): { ok: boolean; errors
   if (!conf || typeof conf !== 'object') {
     errors.push('confidence must be object');
   } else {
-    for (const key of ['role_family', 'level', 'must_haves', 'tech_stack', 'overall']) {
+    for (const key of ['level', 'must_haves', 'tech_stack', 'overall']) {
       const v = conf[key];
       if (typeof v !== 'number' || v < 0 || v > 1) errors.push(`confidence.${key} must be number 0..1`);
     }
@@ -103,7 +110,6 @@ export function validateExtractionShape(payload: unknown): { ok: boolean; errors
   if (!rationale || typeof rationale !== 'object') {
     errors.push('extraction_rationale must be object');
   } else {
-    if (typeof rationale.role_family !== 'string') errors.push('extraction_rationale.role_family must be string');
     if (typeof rationale.level !== 'string') errors.push('extraction_rationale.level must be string');
   }
 
@@ -122,9 +128,23 @@ function normalizeItem(text: string): string {
 
 function normalizeCaseToken(text: string): string {
   if (!text) return '';
+  const specialTokenMap: Record<string, string> = {
+    APIS: 'APIs',
+    GENAI: 'GenAI',
+  };
+  const upperAcronyms = new Set(['API', 'APIS', 'REST', 'CI', 'CD', 'AWS', 'J2EE', 'MQ', 'SQL', 'NOSQL', 'LLM', 'LLMS', 'GENAI']);
   return text
     .split(' ')
-    .map((part) => (part.length <= 2 ? part.toUpperCase() : part[0].toUpperCase() + part.slice(1).toLowerCase()))
+    .map((part) => {
+      const raw = part.trim();
+      if (!raw) return raw;
+      const key = raw.toUpperCase();
+      if (specialTokenMap[key]) return specialTokenMap[key];
+      if (/^[a-z]{1,4}\/[a-z]{1,4}$/i.test(raw)) return raw.toUpperCase();
+      if (upperAcronyms.has(key)) return key;
+      if (/[0-9]/.test(raw) && raw.length <= 6) return raw.toUpperCase();
+      return raw[0].toUpperCase() + raw.slice(1).toLowerCase();
+    })
     .join(' ');
 }
 
@@ -142,37 +162,42 @@ function dedupeStrings(items: string[]): string[] {
   return out;
 }
 
-export function normalizeSkills(
-  input: string[],
-  context: { jdText: string; roleTitle?: string } = { jdText: '' },
-): string[] {
-  const normalized = dedupeStrings(input).map(normalizeCaseToken);
-  const jdLower = `${context.jdText} ${context.roleTitle || ''}`.toLowerCase();
+function isLikelySkillPhrase(raw: string): boolean {
+  const text = normalizeItem(raw);
+  if (!text) return false;
+  if (text.length < 2 || text.length > 48) return false;
+  if (/[?:!]/.test(text)) return false;
+  const words = text.split(/\s+/);
+  if (words.length > 4) return false;
+  if (!/[a-z]/i.test(text)) return false;
 
-  return dedupeStrings(
-    normalized.map((skill) => {
-      const lower = skill.toLowerCase();
-      for (const alias of skillAliases) {
-        if (alias.canonical.toLowerCase() === lower) return alias.canonical;
-        if (alias.aliases.some((candidate) => candidate.toLowerCase() === lower)) {
-          if (alias.canonical === 'Spring Boot') {
-            if (jdLower.includes('boot') || jdLower.includes('spring boot')) return 'Spring Boot';
-            return 'Spring';
-          }
-          return alias.canonical;
-        }
-      }
-      if (lower === 'js') return 'JavaScript';
-      if (lower === 'ts') return 'TypeScript';
-      return skill;
-    }),
-  );
+  const forbidden = /\b(what|you|your|will|need|succeed|title|about|role|opportunity|responsibilit|qualification|required|preferred|must|nice)\b/i;
+  if (forbidden.test(text)) return false;
+  return true;
 }
 
-export function getTemplate(roleFamily: RoleFamily, level: Level): RoleTemplateEntry {
-  const byFamily = templates[roleFamily] as Record<string, RoleTemplateEntry> | undefined;
-  if (byFamily && byFamily[level]) return byFamily[level];
-  return templates.default;
+function normalizeSkillInput(input: string[], strict = false): string[] {
+  const out: string[] = [];
+  for (const rawItem of input) {
+    const raw = String(rawItem || '').trim();
+    if (!raw) continue;
+    const known = extractKnownSkillsFromLine(raw.toLowerCase());
+    if (known.length > 0) {
+      out.push(...known);
+      continue;
+    }
+    if (strict && !isLikelySkillPhrase(raw)) continue;
+    out.push(normalizeCaseToken(cleanupSkillChunk(raw)));
+  }
+  return dedupeStrings(out);
+}
+
+export function normalizeSkills(
+  input: string[],
+  context: { jdText: string; roleTitle?: string; strict?: boolean } = { jdText: '' },
+): string[] {
+  void context;
+  return normalizeSkillInput(input, Boolean(context.strict));
 }
 
 function capStrings(list: string[], max: number): string[] {
@@ -187,17 +212,91 @@ function clampPercent(value: unknown, fallback: number): number {
   return Math.round(n);
 }
 
-function extractSkillsFromJdText(jdText: string): string[] {
-  const lowered = String(jdText || '').toLowerCase();
-  if (!lowered) return [];
-  const out: string[] = [];
-  for (const alias of skillAliases) {
-    const candidates = [alias.canonical, ...(alias.aliases || [])].map((v) => String(v || '').toLowerCase()).filter(Boolean);
-    if (candidates.some((candidate) => lowered.includes(candidate))) {
-      out.push(alias.canonical);
+function cleanupSkillChunk(raw: string): string {
+  return String(raw || '')
+    .replace(/^[\s\-*•:]+/g, '')
+    .replace(
+      /^(solid|strong|good|hands-on)?\s*(professional\s+)?(working\s+knowledge\s+of|knowledge\s+of|experience\s+with|experience\s+in|understanding\s+of|proficiency\s+in|ability\s+to)\s+/i,
+      '',
+    )
+    .replace(/\b(such as|like)\b/gi, '')
+    .replace(/\b(on any major cloud provider|practices and frameworks|methodologies)\b/gi, '')
+    .replace(/[().]/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function extractKnownSkillsFromLine(line: string): string[] {
+  const matches: Array<{ idx: number; label: string }> = [];
+  for (const [re, label] of JD_SKILL_PATTERNS) {
+    const m = line.match(re);
+    if (!m || typeof m.index !== 'number') continue;
+    matches.push({ idx: m.index, label });
+  }
+  return dedupeStrings(
+    matches
+      .sort((a, b) => a.idx - b.idx)
+      .map((m) => m.label),
+  );
+}
+
+function extractSkillSignalsFromJdText(jdText: string): { must: string[]; nice: string[]; all: string[] } {
+  const lines = String(jdText || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) return { must: [], nice: [], all: [] };
+
+  const mustSet = new Set<string>();
+  const niceSet = new Set<string>();
+  const allSet = new Set<string>();
+
+  let section: 'neutral' | 'must' | 'nice' = 'neutral';
+  const mustPattern =
+    /\b(must[-\s]*have|required|minimum qualifications|required qualifications|requirements|what you'll need|must[-\s]*required)\b/i;
+  const nicePattern =
+    /\b(nice[-\s]*to[-\s]*have|preferred|preferred qualifications|good[-\s]*to[-\s]*have|plus|bonus)\b/i;
+  const sectionHeaderOnlyPattern =
+    /^\s*(must[-\s]*have skills?|nice[-\s]*to[-\s]*have skills?|required qualifications?|preferred qualifications?|what you'll need to succeed)\s*:?\s*$/i;
+
+  for (const line of lines) {
+    const lowerLine = line.toLowerCase();
+
+    if (mustPattern.test(lowerLine) && !nicePattern.test(lowerLine)) {
+      section = 'must';
+    } else if (nicePattern.test(lowerLine)) {
+      section = 'nice';
+    }
+
+    if (sectionHeaderOnlyPattern.test(lowerLine)) {
+      continue;
+    }
+    const candidates = extractKnownSkillsFromLine(lowerLine);
+    for (const skill of candidates) {
+      allSet.add(skill);
+      if (nicePattern.test(lowerLine)) {
+        niceSet.add(skill);
+      } else if (mustPattern.test(lowerLine)) {
+        mustSet.add(skill);
+      } else if (section === 'must') {
+        mustSet.add(skill);
+      } else if (section === 'nice') {
+        niceSet.add(skill);
+      }
     }
   }
-  return dedupeStrings(out);
+
+  for (const skill of Array.from(mustSet)) {
+    if (niceSet.has(skill)) {
+      niceSet.delete(skill);
+    }
+  }
+
+  return {
+    must: normalizeSkills(Array.from(mustSet), { jdText: '', strict: true }),
+    nice: normalizeSkills(Array.from(niceSet), { jdText: '', strict: true }),
+    all: normalizeSkills(Array.from(allSet), { jdText: '', strict: true }),
+  };
 }
 
 function normalizeSkillCalibration(
@@ -250,6 +349,13 @@ function normalizeSkillCalibration(
   return out.slice(0, 20);
 }
 
+function isTechStackSkill(skill: string): boolean {
+  const s = normalizeItem(skill);
+  if (!s) return false;
+  if (NON_TECH_STACK_SKILLS.has(s)) return false;
+  return true;
+}
+
 function normalizeFocusAreas(values: string[]): PositionConfigCore['focus_areas'] {
   const out = dedupeStrings(values.map((v) => v.toLowerCase().replace(/\s+/g, '_'))).filter((v): v is PositionConfigCore['focus_areas'][number] =>
     isOneOf(v, FOCUS_AREAS),
@@ -269,17 +375,7 @@ export function normalizeAndMap(
   const missing = new Set<string>(extraction.missing_fields || []);
   const warnings: string[] = [];
 
-  let roleFamily: RoleFamily = 'full_stack';
-  const normalizedRole = String(extraction.role_family || '').trim().toLowerCase();
-  const roleConf = clamp01(extraction.confidence?.role_family, 0);
-  if (isOneOf(normalizedRole, ROLE_FAMILIES) && roleConf >= 0.6) {
-    roleFamily = normalizedRole;
-  } else {
-    missing.add('role_family');
-    warnings.push('Role family defaulted to full_stack.');
-  }
-
-  let level: Level = 'mid';
+  let level: PositionConfigCore['level'] = 'mid';
   const normalizedLevel = String(extraction.level || '').trim().toLowerCase();
   const levelConf = clamp01(extraction.confidence?.level, 0);
   if (isOneOf(normalizedLevel, LEVELS) && levelConf >= 0.6) {
@@ -289,44 +385,43 @@ export function normalizeAndMap(
     warnings.push('Level defaulted to mid.');
   }
 
-  const template = getTemplate(roleFamily, level);
-  const mappedArchetype = isOneOf(template.archetype_id, ARCHETYPES)
-    ? template.archetype_id
-    : templates.default.archetype_id;
-  const mappedDuration = isOneOf(template.duration_minutes, DURATIONS)
-    ? template.duration_minutes
-    : templates.default.duration_minutes;
+  const requestedDuration = Number(extraction.recommended_duration_minutes || 0);
+  const mappedDuration = isOneOf(requestedDuration, DURATIONS) ? requestedDuration : DEFAULT_DURATION;
 
-  const mustHavesNorm = normalizeSkills(extraction.must_haves || [], {
+  const jdSignals = extractSkillSignalsFromJdText(opts.jdText);
+  const hasExplicitJdSections = jdSignals.must.length > 0 || jdSignals.nice.length > 0;
+  const jdSignalSkills = normalizeSkills(jdSignals.all, {
     jdText: opts.jdText,
     roleTitle: opts.roleTitleOverride || extraction.role_title,
+    strict: true,
   });
-  const jdSignalSkills = normalizeSkills(
-    [...extractSkillsFromJdText(opts.jdText), ...(extraction.tech_stack || [])],
-    { jdText: opts.jdText, roleTitle: opts.roleTitleOverride || extraction.role_title },
-  );
-  const mustHavesSeed = dedupeStrings([...mustHavesNorm, ...jdSignalSkills]);
-  const backfill = normalizeSkills(template.must_haves || [], { jdText: opts.jdText });
-  const mustHaves = capStrings(
-    mustHavesSeed.length >= 3 ? mustHavesSeed : dedupeStrings([...mustHavesSeed, ...backfill]),
-    8,
-  );
-  if (mustHaves.length < 3) {
+  const jdMustSignals = normalizeSkills(jdSignals.must, {
+    jdText: opts.jdText,
+    roleTitle: opts.roleTitleOverride || extraction.role_title,
+    strict: true,
+  });
+  const jdNiceSignals = normalizeSkills(jdSignals.nice, {
+    jdText: opts.jdText,
+    roleTitle: opts.roleTitleOverride || extraction.role_title,
+    strict: true,
+  });
+  const mustHaves = capStrings(hasExplicitJdSections ? jdMustSignals : jdSignalSkills, 8);
+  if (mustHaves.length < 1) {
     missing.add('must_haves');
-    warnings.push('Must-haves backfilled from template.');
+    warnings.push('Must-haves could not be extracted from JD.');
   }
 
   const mustSet = new Set(mustHaves.map((x) => x.toLowerCase()));
-  const niceToHavesSeed = dedupeStrings([
-    ...normalizeSkills(extraction.nice_to_haves || [], { jdText: opts.jdText }),
-    ...jdSignalSkills.filter((skill) => !mustSet.has(skill.toLowerCase())),
-  ]);
+  const niceToHavesSeed = dedupeStrings(hasExplicitJdSections ? jdNiceSignals : jdSignalSkills.filter((skill) => !mustSet.has(skill.toLowerCase())));
   const niceToHaves = capStrings(niceToHavesSeed, 8);
-  const techStack = capStrings(normalizeSkills(extraction.tech_stack || template.tech_stack || [], { jdText: opts.jdText }), 15);
-
-  const interviewRoundType = isOneOf(extraction.interview_round_type, INTERVIEW_ROUND_TYPES)
-    ? extraction.interview_round_type
-    : 'standard';
+  const techStack = capStrings(
+    dedupeStrings([
+      ...normalizeSkills(extraction.tech_stack || [], { jdText: opts.jdText, strict: true }).filter(isTechStackSkill),
+      ...jdSignalSkills.filter((skill) => !mustSet.has(skill.toLowerCase()) && isTechStackSkill(skill)),
+      ...mustHaves.filter(isTechStackSkill),
+    ]),
+    15,
+  );
   const deepDiveMode = isOneOf(extraction.deep_dive_mode, DEEP_DIVE_MODES) ? extraction.deep_dive_mode : 'none';
   const strictness = isOneOf(extraction.strictness, STRICTNESS_LEVELS) ? extraction.strictness : 'balanced';
   const evaluationPolicy = isOneOf(extraction.evaluation_policy, EVALUATION_POLICIES)
@@ -337,16 +432,13 @@ export function normalizeAndMap(
   const mustHaveConf = clamp01(extraction.confidence?.must_haves, 0.4);
   const techStackConf = clamp01(extraction.confidence?.tech_stack, 0.4);
   const reportedOverall = clamp01(extraction.confidence?.overall, 0);
-  const inferredOverall = clamp01((roleConf + levelConf + mustHaveConf + techStackConf) / 4, 0.45);
+  const inferredOverall = clamp01((levelConf + mustHaveConf + techStackConf) / 3, 0.45);
   const confidence = reportedOverall >= 0.1 ? reportedOverall : inferredOverall;
 
   return {
     prefill: {
       role_title: (opts.roleTitleOverride || extraction.role_title || 'Untitled Position').trim(),
-      role_family: roleFamily,
       level,
-      interview_round_type: interviewRoundType,
-      archetype_id: mappedArchetype,
       duration_minutes: mappedDuration,
       must_haves: mustHaves,
       nice_to_haves: niceToHaves,
@@ -365,23 +457,15 @@ export function normalizeAndMap(
 }
 
 export function applyDeterministicMapping(config: PositionConfigCore): PositionConfigCore {
-  const template = getTemplate(config.role_family, config.level);
-  const archetype = isOneOf(template.archetype_id, ARCHETYPES)
-    ? template.archetype_id
-    : config.archetype_id;
-  const duration = isOneOf(template.duration_minutes, DURATIONS)
-    ? template.duration_minutes
-    : config.duration_minutes;
+  const duration = isOneOf(config.duration_minutes, DURATIONS) ? config.duration_minutes : DEFAULT_DURATION;
 
   const mustHaves = capStrings(dedupeStrings(normalizeSkills(config.must_haves)), 8);
   const niceToHaves = capStrings(normalizeSkills(config.nice_to_haves), 8);
-  const effectiveMustHaves =
-    mustHaves.length >= 1 ? mustHaves : capStrings(dedupeStrings(normalizeSkills(template.must_haves)), 8);
+  const effectiveMustHaves = mustHaves;
   const effectiveNiceToHaves = niceToHaves;
 
   return {
     ...config,
-    archetype_id: archetype,
     duration_minutes: duration,
     must_haves: effectiveMustHaves,
     nice_to_haves: effectiveNiceToHaves,

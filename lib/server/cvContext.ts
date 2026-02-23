@@ -1,4 +1,3 @@
-import commonSkillTags from '@/master_data/common_skill_tags.json';
 import type { InterviewPositionSnapshot } from '@/lib/server/interviewStore';
 import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
@@ -88,6 +87,16 @@ async function extractWordText(buffer: Buffer, extension: 'doc' | 'docx'): Promi
 }
 
 async function extractPdfText(buffer: Buffer): Promise<string> {
+  try {
+    const mod = await import('pdf-parse');
+    const pdfParse = (mod as unknown as { default?: (input: Buffer) => Promise<{ text?: string }> }).default ?? (mod as never);
+    const parsed = await pdfParse(buffer);
+    const text = String(parsed?.text || '').trim();
+    if (text) return text;
+  } catch {
+    // Fall through to CLI/Python extractors.
+  }
+
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cv-pdf-'));
   const filePath = path.join(tempDir, `${randomUUID()}.pdf`);
   try {
@@ -155,11 +164,22 @@ function detectYearsExperience(text: string): string {
 
 function detectSkills(text: string): string[] {
   const t = text.toLowerCase();
-  const tags = (commonSkillTags as Array<{ canonical: string; aliases: string[] }>).filter((entry) => {
-    const names = [entry.canonical, ...(entry.aliases || [])].map((x) => x.toLowerCase());
-    return names.some((name) => t.includes(name));
-  });
-  return Array.from(new Set(tags.map((x) => x.canonical))).slice(0, 12);
+  const skills: Array<[RegExp, string]> = [
+    [/\bjava\b/, 'Java'],
+    [/\bj2ee\b|\bjee\b/, 'J2EE'],
+    [/\bpython\b/, 'Python'],
+    [/\bnode(\.js)?\b/, 'Node.js'],
+    [/\breact\b/, 'React'],
+    [/\bkubernetes\b|\bk8s\b/, 'Kubernetes'],
+    [/\bdocker\b/, 'Docker'],
+    [/\baws\b|\bamazon web services\b/, 'AWS'],
+    [/\bterraform\b/, 'Terraform'],
+    [/\bci\/?cd\b|\bcontinuous integration\b|\bcontinuous delivery\b/, 'CI/CD'],
+    [/\brest\b|\bapi\b/, 'REST APIs'],
+    [/\bmicroservices?\b/, 'Microservices'],
+  ];
+  const out = skills.filter(([re]) => re.test(t)).map(([, skill]) => skill);
+  return Array.from(new Set(out)).slice(0, 12);
 }
 
 function extractHighlights(text: string): string[] {
@@ -212,8 +232,8 @@ export function buildRoleContextFromPosition(
     );
   }
   const role = [
-    `Role: ${positionSnapshot.role_title} (${positionSnapshot.role_family}/${positionSnapshot.level})`,
-    `Interview type: ${positionSnapshot.interview_round_type}; Duration: ${positionSnapshot.duration_minutes}m; Strictness: ${positionSnapshot.strictness}`,
+    `Role: ${positionSnapshot.role_title} (${positionSnapshot.level})`,
+    `Duration: ${positionSnapshot.duration_minutes}m; Strictness: ${positionSnapshot.strictness}`,
     positionSnapshot.must_haves?.length ? `Must-haves: ${positionSnapshot.must_haves.join(', ')}` : '',
     positionSnapshot.tech_stack?.length ? `Tech stack: ${positionSnapshot.tech_stack.join(', ')}` : '',
     positionSnapshot.focus_areas?.length ? `Focus areas: ${positionSnapshot.focus_areas.join(', ')}` : '',

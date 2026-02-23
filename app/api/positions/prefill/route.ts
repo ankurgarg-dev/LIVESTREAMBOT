@@ -95,6 +95,16 @@ async function extractWordText(buffer: Buffer, extension: 'doc' | 'docx'): Promi
 }
 
 async function extractPdfText(buffer: Buffer): Promise<string> {
+  try {
+    const mod = await import('pdf-parse');
+    const pdfParse = (mod as unknown as { default?: (input: Buffer) => Promise<{ text?: string }> }).default ?? (mod as never);
+    const parsed = await pdfParse(buffer);
+    const text = String(parsed?.text || '').trim();
+    if (text) return text;
+  } catch {
+    // Fall through to CLI/Python extractors.
+  }
+
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'jd-pdf-'));
   const filePath = path.join(tempDir, `${randomUUID()}.pdf`);
   try {
@@ -168,6 +178,11 @@ async function readJdText(form: FormData): Promise<string> {
             ? await extractPdfText(buffer)
           : decodeTextBuffer(buffer);
     if (!content) {
+      if (isPdf) {
+        throw new Error(
+          `Uploaded JD file ${fileValue.name} has no extractable text. It may be scanned/image-only. Try a text-based PDF or paste JD text.`,
+        );
+      }
       throw new Error(`Uploaded JD file ${fileValue.name} appears empty or unreadable.`);
     }
     return content;
@@ -186,7 +201,7 @@ export async function POST(req: NextRequest) {
     const jdText = await readJdText(form);
 
     const result = await extractAndPrefillPosition({ roleTitle, jdText });
-    return NextResponse.json({ ok: true, ...result });
+    return NextResponse.json({ ok: true, jdTextUsed: jdText, ...result });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to prefill from JD';
     return NextResponse.json({ ok: false, error: message }, { status: 400 });

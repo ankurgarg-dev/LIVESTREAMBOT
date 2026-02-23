@@ -47,10 +47,7 @@ export type InterviewAssetMeta = {
 
 export type InterviewPositionSnapshot = {
   role_title: string;
-  role_family: string;
   level: string;
-  interview_round_type: string;
-  archetype_id: string;
   duration_minutes: number;
   must_haves: string[];
   nice_to_haves: string[];
@@ -177,10 +174,32 @@ function sanitizeFilename(name: string): string {
 
 function asInterviewRecord(value: unknown): InterviewRecord | null {
   if (!value || typeof value !== 'object') return null;
-  const typed = value as InterviewRecord;
+  const typed = value as InterviewRecord & {
+    positionSnapshot?: InterviewPositionSnapshot & {
+      role_family?: unknown;
+      interview_round_type?: unknown;
+      archetype_id?: unknown;
+    };
+  };
+  const positionSnapshot = typed.positionSnapshot
+    ? {
+        role_title: String(typed.positionSnapshot.role_title || '').trim(),
+        level: String(typed.positionSnapshot.level || '').trim(),
+        duration_minutes: Number(typed.positionSnapshot.duration_minutes || 0),
+        must_haves: Array.isArray(typed.positionSnapshot.must_haves) ? typed.positionSnapshot.must_haves.map(String) : [],
+        nice_to_haves: Array.isArray(typed.positionSnapshot.nice_to_haves) ? typed.positionSnapshot.nice_to_haves.map(String) : [],
+        tech_stack: Array.isArray(typed.positionSnapshot.tech_stack) ? typed.positionSnapshot.tech_stack.map(String) : [],
+        focus_areas: Array.isArray(typed.positionSnapshot.focus_areas) ? typed.positionSnapshot.focus_areas.map(String) : [],
+        deep_dive_mode: String(typed.positionSnapshot.deep_dive_mode || '').trim(),
+        strictness: String(typed.positionSnapshot.strictness || '').trim(),
+        evaluation_policy: String(typed.positionSnapshot.evaluation_policy || '').trim(),
+        notes_for_interviewer: String(typed.positionSnapshot.notes_for_interviewer || '').slice(0, 600),
+      }
+    : undefined;
   return {
     ...typed,
     agentType: typed.agentType === 'realtime_screening' ? 'realtime_screening' : 'classic',
+    positionSnapshot,
   };
 }
 
