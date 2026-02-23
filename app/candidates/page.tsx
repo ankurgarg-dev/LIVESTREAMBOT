@@ -1,6 +1,6 @@
 'use client';
 
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import React from 'react';
 import styles from './page.module.css';
 
@@ -67,7 +67,6 @@ function pct(value: number | undefined): number {
 
 export default function CandidatesPage() {
   const router = useRouter();
-  const params = useSearchParams();
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState('');
@@ -77,6 +76,7 @@ export default function CandidatesPage() {
   const [selectedPositionId, setSelectedPositionId] = React.useState('');
   const [applications, setApplications] = React.useState<CandidateApplication[]>([]);
   const [selectedId, setSelectedId] = React.useState('');
+  const [initialPositionId, setInitialPositionId] = React.useState('');
 
   const [candidateName, setCandidateName] = React.useState('');
   const [candidateEmail, setCandidateEmail] = React.useState('');
@@ -110,7 +110,7 @@ export default function CandidatesPage() {
     try {
       const loaded = await loadPositions();
       setPositions(loaded);
-      const fromQuery = String(params.get('positionId') || '').trim();
+      const fromQuery = String(initialPositionId || '').trim();
       const fallback = loaded[0]?.position_id || '';
       const chosen = loaded.some((p: PositionRecord) => p.position_id === fromQuery) ? fromQuery : fallback;
       setSelectedPositionId(chosen);
@@ -120,7 +120,12 @@ export default function CandidatesPage() {
     } finally {
       setLoading(false);
     }
-  }, [loadApplications, loadPositions, params]);
+  }, [initialPositionId, loadApplications, loadPositions]);
+
+  React.useEffect(() => {
+    const query = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams();
+    setInitialPositionId(String(query.get('positionId') || '').trim());
+  }, []);
 
   React.useEffect(() => {
     void loadData();
