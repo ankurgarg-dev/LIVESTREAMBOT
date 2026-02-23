@@ -36,3 +36,18 @@ model AgentSetting {
   payload   Json
   updatedAt DateTime
 }
+
+model CandidateApplication {
+  id           String   @id
+  positionId   String
+  candidateName String
+  candidateEmail String
+  overallScore Int
+  recommendation String
+  createdAt    DateTime
+  updatedAt    DateTime
+  payload      Json
+
+  @@index([positionId, updatedAt(sort: Desc)])
+  @@index([updatedAt(sort: Desc)])
+}

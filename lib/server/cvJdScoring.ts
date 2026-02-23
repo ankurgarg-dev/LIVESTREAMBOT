@@ -24,6 +24,17 @@ export type CvJdScorecard = {
   details: CvJdSkillScore[];
 };
 
+export type CvJdDetailedSkillCategory = 'must_have' | 'nice_to_have' | 'tech_stack' | 'focus_area';
+export type CvJdDetailedSkillScore = Omit<CvJdSkillScore, 'category'> & {
+  category: CvJdDetailedSkillCategory;
+};
+
+export type CvJdDetailedScorecard = {
+  overallScore: number;
+  summary: string;
+  details: CvJdDetailedSkillScore[];
+};
+
 const STOP_WORDS = new Set([
   'and',
   'or',
@@ -197,5 +208,55 @@ export function computeCvJdScorecard(input: {
     commonTotal: commonRows.length,
     summary: summaryParts.join(' | '),
     details: [...mustRows, ...commonRows],
+  };
+}
+
+export function computeCvJdDetailedScorecard(input: {
+  candidateContext?: string;
+  mustHaves?: string[];
+  niceToHaves?: string[];
+  techStack?: string[];
+  focusAreas?: string[];
+}): CvJdDetailedScorecard | undefined {
+  const candidateContext = clean(input.candidateContext || '');
+  if (!candidateContext) return undefined;
+
+  const rows: CvJdDetailedSkillScore[] = [];
+  const seen = new Set<string>();
+  const addRows = (category: CvJdDetailedSkillCategory, values: string[] | undefined) => {
+    for (const skill of dedupeSkills(values || [])) {
+      const key = `${category}:${skill.toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const scored = scoreOneSkill(skill, candidateContext);
+      rows.push({
+        skill,
+        category,
+        matched: scored.matched,
+        matchType: scored.matchType,
+        score: scored.score,
+        oneLiner: scored.oneLiner,
+      });
+    }
+  };
+
+  addRows('must_have', input.mustHaves);
+  addRows('nice_to_have', input.niceToHaves);
+  addRows('tech_stack', input.techStack);
+  addRows('focus_area', input.focusAreas);
+  if (!rows.length) return undefined;
+
+  const overallScore = averageScore(
+    rows.map((row) => ({
+      ...row,
+      category: row.category === 'must_have' ? 'must_have' : 'common',
+    })),
+  );
+  const matched = rows.filter((row) => row.matched).length;
+
+  return {
+    overallScore,
+    summary: `${matched}/${rows.length} competencies matched`,
+    details: rows,
   };
 }

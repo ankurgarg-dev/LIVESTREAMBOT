@@ -921,6 +921,19 @@ export default function Page() {
                 <button type="button" className="lk-button" onClick={() => router.push('/positions/new')}>
                   Edit Positions
                 </button>
+                <button
+                  type="button"
+                  className="lk-button"
+                  onClick={() =>
+                    router.push(
+                      selectedPositionId
+                        ? `/candidates?positionId=${encodeURIComponent(selectedPositionId)}`
+                        : '/candidates',
+                    )
+                  }
+                >
+                  Candidates Module
+                </button>
               </div>
 
               {positions.length === 0 ? <p>No positions found. Create one from New Position Setup.</p> : null}
@@ -988,6 +1001,21 @@ export default function Page() {
 
                       {positionsTab === 'candidates' ? (
                         <div className={styles.interviewList}>
+                          <div className={styles.cardButtons}>
+                            <button
+                              type="button"
+                              className="lk-button"
+                              onClick={() =>
+                                router.push(
+                                  selectedPositionId
+                                    ? `/candidates?positionId=${encodeURIComponent(selectedPositionId)}`
+                                    : '/candidates',
+                                )
+                              }
+                            >
+                              Open CV Applications
+                            </button>
+                          </div>
                           {interviewsForSelectedPosition.length === 0 ? <p>No candidates in pipeline yet.</p> : null}
                           {interviewsForSelectedPosition.map((item) => (
                             <div key={item.id} className={styles.interviewCard}>
