@@ -703,10 +703,15 @@ async function createAgentSession(
     systemPrompt: process.env.OPENAI_SYSTEM_PROMPT || undefined,
   });
 
+  const classicVoice = process.env.OPENAI_TTS_VOICE_CLASSIC || process.env.OPENAI_TTS_VOICE || 'coral';
+  const realtimeVoice =
+    process.env.OPENAI_TTS_VOICE_REALTIME_SCREENING || process.env.OPENAI_TTS_VOICE || 'coral';
+  const ttsVoice = selectedAgentType === AGENT_TYPE_REALTIME_SCREENING ? realtimeVoice : classicVoice;
+
   const ttsService = new TTSService({
     apiKey: process.env.OPENAI_API_KEY,
     model: process.env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts',
-    voice: process.env.OPENAI_TTS_VOICE || 'coral',
+    voice: ttsVoice,
   });
 
   const transcriptionService = new TranscriptionService({
