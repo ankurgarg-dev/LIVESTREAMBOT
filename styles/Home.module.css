@@ -264,6 +264,91 @@
   font: inherit;
 }
 
+.scoreSheetBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(9, 20, 30, 0.45);
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+}
+
+.scoreSheet {
+  width: min(980px, 96vw);
+  max-height: 88vh;
+  overflow: auto;
+  border-radius: 1rem;
+  border: 1px solid #d0dfe7;
+  background: #f8fcfe;
+  padding: 1rem;
+  display: grid;
+  gap: 0.8rem;
+}
+
+.scoreSheetHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.scoreSummaryGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.scorePill {
+  border: 1px solid #c8dce8;
+  border-radius: 0.8rem;
+  background: #eef7fb;
+  padding: 0.7rem;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.scorePill span {
+  font-size: 0.8rem;
+  color: #446070;
+}
+
+.scorePill strong {
+  font-size: 1.1rem;
+  color: #173546;
+}
+
+.scoreTable {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.scoreRow {
+  display: grid;
+  grid-template-columns: minmax(140px, 200px) minmax(90px, 120px) minmax(0, 1fr);
+  gap: 0.6rem;
+  align-items: start;
+  border: 1px solid #d0e0e8;
+  border-radius: 0.7rem;
+  background: #ffffff;
+  padding: 0.55rem 0.65rem;
+}
+
+.scoreSkill {
+  font-weight: 700;
+  color: #1f4457;
+}
+
+.scoreMatch {
+  font-weight: 600;
+  color: #2b6475;
+}
+
+.scoreEvidence {
+  font-size: 0.86rem;
+  color: #405b6c;
+}
+
 @media (max-width: 1020px) {
   .heroCard {
     grid-template-columns: 1fr;
@@ -276,6 +361,10 @@
 
   .heroRingOuter {
     width: min(300px, 60vw);
+  }
+
+  .scoreSummaryGrid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -290,5 +379,9 @@
 
   .heroTitle {
     line-height: 0.98;
+  }
+
+  .scoreRow {
+    grid-template-columns: 1fr;
   }
 }

@@ -1,13 +1,13 @@
 import {
   attachInterviewAsset,
   createInterview,
-  updateInterview,
   type InterviewAgentType,
   type InterviewPositionSnapshot,
   listInterviews,
   type InterviewCreateInput,
 } from '@/lib/server/interviewStore';
 import { buildRoleContextFromPosition, extractCandidateContextFromUpload } from '@/lib/server/cvContext';
+import { computeCvJdScorecard } from '@/lib/server/cvJdScoring';
 import { RoomServiceClient } from 'livekit-server-sdk';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -88,7 +88,18 @@ async function ensureRoomExists(roomName: string): Promise<void> {
 export async function GET() {
   try {
     const interviews = await listInterviews();
-    return NextResponse.json({ ok: true, interviews });
+    const withScores = interviews.map((interview) => {
+      if (interview.cvJdScorecard) return interview;
+      return {
+        ...interview,
+        cvJdScorecard: computeCvJdScorecard({
+          candidateContext: interview.candidateContext,
+          roleContext: interview.roleContext,
+          positionSnapshot: interview.positionSnapshot,
+        }),
+      };
+    });
+    return NextResponse.json({ ok: true, interviews: withScores });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load interviews';
     return NextResponse.json({ error: message }, { status: 500 });
@@ -118,6 +129,11 @@ export async function POST(req: NextRequest) {
       ? await extractCandidateContextFromUpload(cvFile).catch(() => '')
       : '';
     const roleContext = buildRoleContextFromPosition(positionSnapshot, fallbackJobTitle, fallbackJobDepartment);
+    const cvJdScorecard = computeCvJdScorecard({
+      candidateContext,
+      roleContext,
+      positionSnapshot,
+    });
 
     const input: InterviewCreateInput = {
       roomName: normalizeRoomName(requestedRoomName || defaultRoomName),
@@ -136,6 +152,7 @@ export async function POST(req: NextRequest) {
       roleContext,
       positionId,
       positionSnapshot,
+      cvJdScorecard,
     };
 
     // Room provisioning is best-effort: interview setup must still save even if
@@ -154,13 +171,6 @@ export async function POST(req: NextRequest) {
     if (isUploadedFile(jdFile) && jdFile.size > 0) {
       interview = await attachInterviewAsset(interview.id, 'jd', jdFile);
     }
-    if ((candidateContext || roleContext) && interview.id) {
-      interview = await updateInterview(interview.id, {
-        candidateContext: candidateContext || undefined,
-        roleContext: roleContext || undefined,
-      });
-    }
-
     return NextResponse.json({ ok: true, interview }, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to create interview';

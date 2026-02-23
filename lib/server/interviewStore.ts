@@ -3,6 +3,7 @@ import { mkdir, stat, unlink, writeFile } from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { getPrismaClient } from '@/lib/server/prismaClient';
+import type { CvJdScorecard } from '@/lib/server/cvJdScoring';
 
 export type InterviewStatus = 'scheduled' | 'completed' | 'cancelled';
 export type Recommendation = 'strong_hire' | 'hire' | 'hold' | 'no_hire' | '';
@@ -94,6 +95,7 @@ export type InterviewRecord = {
   nextSteps?: string;
   transcriptText?: string;
   assessmentReport?: EnhancedAssessmentReport;
+  cvJdScorecard?: CvJdScorecard;
   createdAt: string;
   updatedAt: string;
 };
@@ -115,6 +117,7 @@ export type InterviewCreateInput = {
   roleContext?: string;
   positionId?: string;
   positionSnapshot?: InterviewPositionSnapshot;
+  cvJdScorecard?: CvJdScorecard;
 };
 
 export type InterviewUpdateInput = Partial<
@@ -136,6 +139,20 @@ export type InterviewUpdateInput = Partial<
     | 'assessmentReport'
     | 'candidateContext'
     | 'roleContext'
+    | 'candidateName'
+    | 'candidateEmail'
+    | 'interviewerName'
+    | 'interviewerEmail'
+    | 'jobTitle'
+    | 'jobDepartment'
+    | 'scheduledAt'
+    | 'durationMinutes'
+    | 'timezone'
+    | 'notes'
+    | 'roomName'
+    | 'positionId'
+    | 'positionSnapshot'
+    | 'cvJdScorecard'
   >
 >;
 
@@ -214,6 +231,7 @@ export async function createInterview(input: InterviewCreateInput): Promise<Inte
     roleContext: input.roleContext,
     positionId: input.positionId,
     positionSnapshot: input.positionSnapshot,
+    cvJdScorecard: input.cvJdScorecard,
     createdAt: now,
     updatedAt: now,
   };

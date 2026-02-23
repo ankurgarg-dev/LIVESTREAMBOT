@@ -52,6 +52,27 @@ type InterviewAssetMeta = {
   size: number;
 };
 
+type CvJdSkillScore = {
+  skill: string;
+  category: 'must_have' | 'common';
+  matched: boolean;
+  matchType: 'exact' | 'partial' | 'none';
+  score: number;
+  oneLiner: string;
+};
+
+type CvJdScorecard = {
+  overallScore: number;
+  mustHaveScore: number;
+  commonSkillScore: number;
+  mustHaveMatched: number;
+  mustHaveTotal: number;
+  commonMatched: number;
+  commonTotal: number;
+  summary: string;
+  details: CvJdSkillScore[];
+};
+
 type InterviewRecord = {
   id: string;
   status: 'scheduled' | 'completed' | 'cancelled';
@@ -82,6 +103,7 @@ type InterviewRecord = {
   detailedFeedback?: string;
   nextSteps?: string;
   transcriptText?: string;
+  cvJdScorecard?: CvJdScorecard;
   createdAt: string;
   updatedAt: string;
 };
@@ -112,6 +134,11 @@ function formatDate(dateStr: string): string {
   const d = new Date(dateStr);
   if (Number.isNaN(d.getTime())) return dateStr;
   return d.toLocaleString();
+}
+
+function formatScoreTag(scorecard: CvJdScorecard | undefined): string {
+  if (!scorecard || typeof scorecard.overallScore !== 'number') return 'CV-JD N/A';
+  return `CV-JD ${Math.max(0, Math.min(100, Math.round(scorecard.overallScore)))}`;
 }
 
 function toLocalDateInputValue(date: Date): string {
@@ -213,6 +240,7 @@ export default function Page() {
 
   const [editingSetupId, setEditingSetupId] = useState('');
   const [selectedOutcomeId, setSelectedOutcomeId] = useState('');
+  const [selectedCvJdInterviewId, setSelectedCvJdInterviewId] = useState('');
   const [setupForm, setSetupForm] = useState<SetupFormState>(() => buildDefaultSetup(defaultAgentRoom));
   const [reportDraft, setReportDraft] = useState<Record<string, string>>({});
   const [agentPromptSettings, setAgentPromptSettings] = useState<AgentPromptSettings>(
@@ -222,6 +250,10 @@ export default function Page() {
   const selectedOutcome = useMemo(
     () => interviews.find((item) => item.id === selectedOutcomeId),
     [interviews, selectedOutcomeId],
+  );
+  const selectedCvJdInterview = useMemo(
+    () => interviews.find((item) => item.id === selectedCvJdInterviewId),
+    [interviews, selectedCvJdInterviewId],
   );
 
   const selectedPosition = useMemo(
@@ -744,10 +776,14 @@ export default function Page() {
                       <span>{item.jobTitle}</span>
                       <span>{item.status.toUpperCase()}</span>
                       <span>{`Room ${item.roomName}`}</span>
+                      <span>{formatScoreTag(item.cvJdScorecard)}</span>
                     </div>
                     <div className={styles.cardButtons}>
                       <button type="button" className="lk-button" onClick={() => router.push(buildInterviewJoinUrl(item))}>
                         Join
+                      </button>
+                      <button type="button" className="lk-button" onClick={() => setSelectedCvJdInterviewId(item.id)}>
+                        View CV-JD Score
                       </button>
                       <button type="button" className="lk-button" onClick={() => openOutcome(item.id)}>
                         View details
@@ -876,10 +912,14 @@ export default function Page() {
                               <div className={styles.interviewMeta}>
                                 <span>{formatDate(item.scheduledAt)}</span>
                                 <span>{`Room ${item.roomName}`}</span>
+                                <span>{formatScoreTag(item.cvJdScorecard)}</span>
                               </div>
                               <div className={styles.cardButtons}>
                                 <button type="button" className="lk-button" onClick={() => router.push(buildInterviewJoinUrl(item))}>
                                   Join
+                                </button>
+                                <button type="button" className="lk-button" onClick={() => setSelectedCvJdInterviewId(item.id)}>
+                                  View CV-JD Score
                                 </button>
                                 <button type="button" className="lk-button" onClick={() => openOutcome(item.id)}>
                                   View outcomes
@@ -1302,6 +1342,7 @@ export default function Page() {
                       <span>{`Duration ${item.durationMinutes} min`}</span>
                       <span>{item.agentType === 'realtime_screening' ? 'Agent: Realtime Screening' : 'Agent: Classic'}</span>
                       <span>{`Room ${item.roomName}`}</span>
+                      <span>{formatScoreTag(item.cvJdScorecard)}</span>
                     </div>
                     <div className={styles.cardButtons}>
                       <button type="button" className="lk-button" onClick={() => startEditInterview(item)}>
@@ -1309,6 +1350,9 @@ export default function Page() {
                       </button>
                       <button type="button" className="lk-button" onClick={() => router.push(buildInterviewJoinUrl(item))}>
                         Join
+                      </button>
+                      <button type="button" className="lk-button" onClick={() => setSelectedCvJdInterviewId(item.id)}>
+                        View CV-JD Score
                       </button>
                       <button type="button" className="lk-button" onClick={() => openOutcome(item.id)}>
                         View outcomes
@@ -1656,6 +1700,75 @@ export default function Page() {
           ) : null}
         </div>
       </main>
+      {selectedCvJdInterview ? (
+        <div className={styles.scoreSheetBackdrop} role="presentation" onClick={() => setSelectedCvJdInterviewId('')}>
+          <div className={styles.scoreSheet} role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+            <div className={styles.scoreSheetHeader}>
+              <h3 style={{ margin: 0 }}>{`CV vs JD Skill Match: ${selectedCvJdInterview.candidateName}`}</h3>
+              <button type="button" className="lk-button" onClick={() => setSelectedCvJdInterviewId('')}>
+                Close
+              </button>
+            </div>
+            {selectedCvJdInterview.cvJdScorecard ? (
+              <>
+                <div className={styles.scoreSummaryGrid}>
+                  <div className={styles.scorePill}>
+                    <span>Overall</span>
+                    <strong>{`${selectedCvJdInterview.cvJdScorecard.overallScore}/100`}</strong>
+                  </div>
+                  <div className={styles.scorePill}>
+                    <span>Must-have</span>
+                    <strong>{`${selectedCvJdInterview.cvJdScorecard.mustHaveScore}/100`}</strong>
+                  </div>
+                  <div className={styles.scorePill}>
+                    <span>Common</span>
+                    <strong>{`${selectedCvJdInterview.cvJdScorecard.commonSkillScore}/100`}</strong>
+                  </div>
+                </div>
+                <p className={styles.interviewMeta}>{selectedCvJdInterview.cvJdScorecard.summary}</p>
+
+                <h4 style={{ marginBottom: 0 }}>Must-have Skills</h4>
+                {selectedCvJdInterview.cvJdScorecard.details.filter((x) => x.category === 'must_have').length === 0 ? (
+                  <p className={styles.interviewMeta}>No must-have skills defined on this JD.</p>
+                ) : (
+                  <div className={styles.scoreTable}>
+                    {selectedCvJdInterview.cvJdScorecard.details
+                      .filter((x) => x.category === 'must_have')
+                      .map((item) => (
+                        <div key={`must-${item.skill}`} className={styles.scoreRow}>
+                          <span className={styles.scoreSkill}>{item.skill}</span>
+                          <span className={styles.scoreMatch}>{item.matched ? `Match (${item.score})` : 'Gap (0)'}</span>
+                          <span className={styles.scoreEvidence}>{item.oneLiner}</span>
+                        </div>
+                      ))}
+                  </div>
+                )}
+
+                <h4 style={{ marginBottom: 0 }}>Common Skills</h4>
+                {selectedCvJdInterview.cvJdScorecard.details.filter((x) => x.category === 'common').length === 0 ? (
+                  <p className={styles.interviewMeta}>No common skills defined on this JD.</p>
+                ) : (
+                  <div className={styles.scoreTable}>
+                    {selectedCvJdInterview.cvJdScorecard.details
+                      .filter((x) => x.category === 'common')
+                      .map((item) => (
+                        <div key={`common-${item.skill}`} className={styles.scoreRow}>
+                          <span className={styles.scoreSkill}>{item.skill}</span>
+                          <span className={styles.scoreMatch}>{item.matched ? `Match (${item.score})` : 'Gap (0)'}</span>
+                          <span className={styles.scoreEvidence}>{item.oneLiner}</span>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className={styles.interviewMeta}>
+                Score unavailable. Upload CV and ensure JD has must-have/common skills.
+              </p>
+            )}
+          </div>
+        </div>
+      ) : null}
       <footer data-lk-theme="default">
         Bristlecone Technical Interaction helps hiring teams run consistent, high-signal technical
         screening interviews.

@@ -1,5 +1,16 @@
 import { deleteInterview, getInterview, updateInterview } from '@/lib/server/interviewStore';
+import { computeCvJdScorecard } from '@/lib/server/cvJdScoring';
 import { NextRequest, NextResponse } from 'next/server';
+
+function isScoreAffectingPatch(payload: Record<string, unknown>): boolean {
+  return (
+    'candidateContext' in payload ||
+    'roleContext' in payload ||
+    'positionSnapshot' in payload ||
+    'candidateName' in payload ||
+    'jobTitle' in payload
+  );
+}
 
 export async function GET(
   _req: NextRequest,
@@ -11,7 +22,14 @@ export async function GET(
     if (!interview) {
       return NextResponse.json({ error: 'Interview not found' }, { status: 404 });
     }
-    return NextResponse.json({ ok: true, interview });
+    const cvJdScorecard =
+      interview.cvJdScorecard ||
+      computeCvJdScorecard({
+        candidateContext: interview.candidateContext,
+        roleContext: interview.roleContext,
+        positionSnapshot: interview.positionSnapshot,
+      });
+    return NextResponse.json({ ok: true, interview: { ...interview, cvJdScorecard } });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load interview';
     return NextResponse.json({ error: message }, { status: 500 });
@@ -24,8 +42,18 @@ export async function PATCH(
 ) {
   try {
     const { id } = await ctx.params;
-    const payload = await req.json();
-    const interview = await updateInterview(id, payload ?? {});
+    const payload = ((await req.json()) ?? {}) as Record<string, unknown>;
+    let interview = await updateInterview(id, payload);
+
+    if (isScoreAffectingPatch(payload) || !interview.cvJdScorecard) {
+      const scorecard = computeCvJdScorecard({
+        candidateContext: interview.candidateContext,
+        roleContext: interview.roleContext,
+        positionSnapshot: interview.positionSnapshot,
+      });
+      interview = await updateInterview(id, { cvJdScorecard: scorecard });
+    }
+
     return NextResponse.json({ ok: true, interview });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to update interview';
