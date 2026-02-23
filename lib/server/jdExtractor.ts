@@ -16,22 +16,34 @@ import type {
   Strictness,
 } from '@/lib/position/types';
 
+const ROLE_FAMILY_KEYWORDS: Array<{ role: RoleFamily; words: string[] }> = [
+  { role: 'machine_learning', words: ['machine learning', 'ml engineer', 'genai', 'llm', 'agentic ai', 'mlops', 'pytorch', 'tensorflow'] },
+  { role: 'backend', words: ['backend', 'api', 'microservice', 'distributed system', 'golang', 'java', 'spring boot', 'node.js'] },
+  { role: 'frontend', words: ['frontend', 'ui', 'react', 'next.js', 'javascript', 'typescript', 'css'] },
+  { role: 'data', words: ['data engineer', 'data platform', 'etl', 'warehouse', 'spark', 'databricks', 'airflow', 'snowflake'] },
+  { role: 'devops', words: ['devops', 'sre', 'kubernetes', 'terraform', 'infrastructure', 'observability', 'prometheus', 'grafana'] },
+  { role: 'qa', words: ['qa', 'quality assurance', 'automation testing', 'selenium', 'cypress', 'playwright'] },
+  { role: 'mobile', words: ['android', 'ios', 'swift', 'kotlin', 'mobile app', 'react native', 'flutter'] },
+  { role: 'security', words: ['security', 'appsec', 'threat modeling', 'vulnerability', 'soc', 'iam', 'incident response'] },
+  { role: 'full_stack', words: ['full stack', 'end-to-end', 'frontend and backend', 'web application'] },
+];
+
 function detectRoleFamily(text: string): { value: RoleFamily; confidence: number; rationale: string } {
   const t = text.toLowerCase();
-  if (/(machine learning|ml engineer|genai|llm|agentic ai|mlops)/.test(t)) {
-    return { value: 'machine_learning', confidence: 0.9, rationale: 'Detected ML/GenAI/LLM/Agentic AI keywords.' };
+  let best: { role: RoleFamily; hits: number; terms: string[] } = { role: 'full_stack', hits: 0, terms: [] };
+  for (const candidate of ROLE_FAMILY_KEYWORDS) {
+    const matched = candidate.words.filter((w) => t.includes(w));
+    if (matched.length > best.hits) {
+      best = { role: candidate.role, hits: matched.length, terms: matched };
+    }
   }
-  if (/(backend|api|microservice|distributed system)/.test(t)) {
-    return { value: 'backend', confidence: 0.8, rationale: 'Detected backend/service architecture keywords.' };
-  }
-  if (/(frontend|ui|react|web app)/.test(t)) {
-    return { value: 'frontend', confidence: 0.8, rationale: 'Detected frontend/UI keywords.' };
-  }
-  if (/(data engineer|data platform|etl|warehouse)/.test(t)) {
-    return { value: 'data', confidence: 0.75, rationale: 'Detected data platform/ETL keywords.' };
-  }
-  if (/(devops|sre|kubernetes|terraform|infrastructure)/.test(t)) {
-    return { value: 'devops', confidence: 0.75, rationale: 'Detected DevOps/SRE keywords.' };
+  if (best.hits >= 1) {
+    const confidence = Math.min(0.92, 0.58 + best.hits * 0.12);
+    return {
+      value: best.role,
+      confidence,
+      rationale: `Detected ${best.role} keywords: ${best.terms.slice(0, 4).join(', ')}.`,
+    };
   }
   return { value: 'full_stack', confidence: 0.55, rationale: 'Fallback role family due to weak signal.' };
 }
@@ -349,10 +361,8 @@ export async function extractAndPrefillPosition(input: {
 
   const typed = extractionObj as PositionExtraction;
   const heuristic = fallbackExtraction(roleTitle, jdText);
-  if (
-    (!typed.role_family || typed.confidence?.role_family < 0.6) &&
-    heuristic.confidence.role_family >= 0.6
-  ) {
+  const typedRoleConf = Number(typed.confidence?.role_family || 0);
+  if ((!typed.role_family || typedRoleConf < 0.75) && heuristic.confidence.role_family >= typedRoleConf + 0.1) {
     typed.role_family = heuristic.role_family;
     typed.confidence.role_family = heuristic.confidence.role_family;
     typed.extraction_rationale.role_family = `${typed.extraction_rationale.role_family} | heuristic_applied`;

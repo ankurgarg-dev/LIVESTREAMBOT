@@ -20,6 +20,13 @@ type Recommendation = 'strong_hire' | 'hire' | 'hold' | 'no_hire' | '';
 type AgentType = 'classic' | 'realtime_screening';
 type MainTab = 'dashboard' | 'positions' | 'interviews' | 'settings';
 type PositionDetailsTab = 'job' | 'plan' | 'candidates' | 'interviews';
+type SkillCalibrationCategory = 'must_have' | 'nice_to_have';
+type SkillCalibrationItem = {
+  skill: string;
+  category: SkillCalibrationCategory;
+  definition: string;
+  weight_percent: number;
+};
 type AgentPromptSettings = {
   classicPrompt: string;
   realtimePrompt: string;
@@ -141,6 +148,47 @@ function formatScoreTag(scorecard: CvJdScorecard | undefined): string {
   return `CV-JD ${Math.max(0, Math.min(100, Math.round(scorecard.overallScore)))}`;
 }
 
+function normalizeSkillCalibration(input: SkillCalibrationItem[]): SkillCalibrationItem[] {
+  const out: SkillCalibrationItem[] = [];
+  const seen = new Set<string>();
+  for (const row of input) {
+    const skill = String(row.skill || '').trim();
+    if (!skill) continue;
+    const key = skill.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      skill,
+      category: row.category === 'nice_to_have' ? 'nice_to_have' : 'must_have',
+      definition: String(row.definition || '').trim().slice(0, 260),
+      weight_percent: Math.max(0, Math.min(100, Math.round(Number(row.weight_percent) || 0))),
+    });
+  }
+  return out.slice(0, 20);
+}
+
+function buildSkillCalibrationDraft(position: PositionConfigCore | null): SkillCalibrationItem[] {
+  if (!position) return [];
+  const seeded = Array.isArray(position.skills_calibration)
+    ? normalizeSkillCalibration(position.skills_calibration as SkillCalibrationItem[])
+    : [];
+  const seen = new Set(seeded.map((row) => row.skill.toLowerCase()));
+  const out = [...seeded];
+  for (const skill of position.must_haves || []) {
+    const key = String(skill || '').trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push({ skill, category: 'must_have', definition: '', weight_percent: 60 });
+  }
+  for (const skill of position.nice_to_haves || []) {
+    const key = String(skill || '').trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push({ skill, category: 'nice_to_have', definition: '', weight_percent: 20 });
+  }
+  return out.slice(0, 20);
+}
+
 function toLocalDateInputValue(date: Date): string {
   const yyyy = date.getFullYear();
   const mm = String(date.getMonth() + 1).padStart(2, '0');
@@ -218,6 +266,9 @@ function clonePosition(position: PositionRecord | PositionConfigCore): PositionC
     strictness: position.strictness,
     evaluation_policy: position.evaluation_policy,
     notes_for_interviewer: position.notes_for_interviewer,
+    skills_calibration: Array.isArray(position.skills_calibration)
+      ? position.skills_calibration.map((row) => ({ ...row }))
+      : [],
   };
 }
 
@@ -237,6 +288,8 @@ export default function Page() {
 
   const [selectedPositionId, setSelectedPositionId] = useState('');
   const [positionDraft, setPositionDraft] = useState<PositionConfigCore | null>(null);
+  const [isSkillsCalibrationOpen, setIsSkillsCalibrationOpen] = useState(false);
+  const [skillsCalibrationDraft, setSkillsCalibrationDraft] = useState<SkillCalibrationItem[]>([]);
 
   const [editingSetupId, setEditingSetupId] = useState('');
   const [selectedOutcomeId, setSelectedOutcomeId] = useState('');
@@ -676,6 +729,53 @@ export default function Page() {
     }
   };
 
+  const openSkillsCalibration = () => {
+    setSkillsCalibrationDraft(buildSkillCalibrationDraft(positionDraft));
+    setIsSkillsCalibrationOpen(true);
+  };
+
+  const saveSkillsCalibration = async () => {
+    if (!selectedPosition || !positionDraft) return;
+    const normalizedRows = normalizeSkillCalibration(skillsCalibrationDraft);
+    const mustHaves = normalizedRows
+      .filter((row) => row.category === 'must_have')
+      .map((row) => row.skill)
+      .slice(0, 8);
+    const niceToHaves = normalizedRows
+      .filter((row) => row.category === 'nice_to_have')
+      .map((row) => row.skill)
+      .slice(0, 8);
+    const nextConfig: PositionConfigCore = {
+      ...positionDraft,
+      must_haves: mustHaves,
+      nice_to_haves: niceToHaves,
+      skills_calibration: normalizedRows,
+    };
+
+    setSaving(true);
+    setError('');
+    setSuccess('');
+    try {
+      const response = await fetch(`/api/positions/${selectedPosition.position_id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ finalConfig: nextConfig }),
+      });
+      const json = await response.json();
+      if (!response.ok || !json.ok) {
+        throw new Error(json.error || 'Failed to save skill calibration');
+      }
+      setPositionDraft(clonePosition(nextConfig));
+      setSuccess('Skill calibration updated.');
+      setIsSkillsCalibrationOpen(false);
+      await loadData();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Failed to save skill calibration');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const saveAgentPromptSettings = async () => {
     setSaving(true);
     setError('');
@@ -860,7 +960,15 @@ export default function Page() {
                           <h4 style={{ marginTop: 0 }}>{positionDraft.role_title}</h4>
                           <p className={styles.interviewMeta}>{positionDraft.notes_for_interviewer || 'No JD notes saved for this position.'}</p>
                           <p className={styles.interviewMeta}>{`Role family: ${positionDraft.role_family} | Level: ${positionDraft.level}`}</p>
+                          <p className={styles.interviewMeta}>
+                            {`Must-haves: ${positionDraft.must_haves.join(', ') || 'None'} | Nice-to-haves: ${
+                              positionDraft.nice_to_haves.join(', ') || 'None'
+                            }`}
+                          </p>
                           <div className={styles.cardButtons}>
+                            <button type="button" className="lk-button" onClick={openSkillsCalibration}>
+                              Manage Skills Calibration
+                            </button>
                             <button
                               type="button"
                               className="lk-button"
@@ -1766,6 +1874,112 @@ export default function Page() {
                 Score unavailable. Upload CV and ensure JD has must-have/common skills.
               </p>
             )}
+          </div>
+        </div>
+      ) : null}
+      {isSkillsCalibrationOpen ? (
+        <div className={styles.scoreSheetBackdrop} role="presentation" onClick={() => setIsSkillsCalibrationOpen(false)}>
+          <div className={styles.scoreSheet} role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+            <div className={styles.scoreSheetHeader}>
+              <h3 style={{ margin: 0 }}>Manage Skills Calibration</h3>
+              <button type="button" className="lk-button" onClick={() => setIsSkillsCalibrationOpen(false)}>
+                Close
+              </button>
+            </div>
+            <p className={styles.interviewMeta}>
+              Set must-have and nice-to-have skill rows, one-line definition, and weightage.
+            </p>
+            <div className={styles.scoreTable}>
+              {skillsCalibrationDraft.map((row, idx) => (
+                <div key={`${row.skill}-${idx}`} className={styles.calibrationRow}>
+                  <input
+                    value={row.skill}
+                    placeholder="Skill"
+                    onChange={(e) =>
+                      setSkillsCalibrationDraft((prev) =>
+                        prev.map((item, itemIdx) =>
+                          itemIdx === idx ? { ...item, skill: e.target.value } : item,
+                        ),
+                      )
+                    }
+                  />
+                  <select
+                    value={row.category}
+                    onChange={(e) =>
+                      setSkillsCalibrationDraft((prev) =>
+                        prev.map((item, itemIdx) =>
+                          itemIdx === idx
+                            ? {
+                                ...item,
+                                category:
+                                  e.target.value === 'nice_to_have' ? 'nice_to_have' : 'must_have',
+                              }
+                            : item,
+                        ),
+                      )
+                    }
+                  >
+                    <option value="must_have">Must Have</option>
+                    <option value="nice_to_have">Nice To Have</option>
+                  </select>
+                  <input
+                    value={row.definition}
+                    placeholder="One-line definition"
+                    onChange={(e) =>
+                      setSkillsCalibrationDraft((prev) =>
+                        prev.map((item, itemIdx) =>
+                          itemIdx === idx ? { ...item, definition: e.target.value } : item,
+                        ),
+                      )
+                    }
+                  />
+                  <div className={styles.weightControl}>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={Math.max(0, Math.min(100, Math.round(row.weight_percent || 0)))}
+                      onChange={(e) =>
+                        setSkillsCalibrationDraft((prev) =>
+                          prev.map((item, itemIdx) =>
+                            itemIdx === idx
+                              ? { ...item, weight_percent: Number(e.target.value) }
+                              : item,
+                          ),
+                        )
+                      }
+                    />
+                    <span>{`${Math.max(0, Math.min(100, Math.round(row.weight_percent || 0)))}%`}</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="lk-button"
+                    onClick={() =>
+                      setSkillsCalibrationDraft((prev) => prev.filter((_, itemIdx) => itemIdx !== idx))
+                    }
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className={styles.cardButtons}>
+              <button
+                type="button"
+                className="lk-button"
+                onClick={() =>
+                  setSkillsCalibrationDraft((prev) => [
+                    ...prev,
+                    { skill: '', category: 'must_have', definition: '', weight_percent: 60 },
+                  ])
+                }
+              >
+                Add Skill
+              </button>
+              <button type="button" className="lk-button" onClick={saveSkillsCalibration} disabled={saving}>
+                {saving ? 'Saving...' : 'Save Calibration'}
+              </button>
+            </div>
           </div>
         </div>
       ) : null}

@@ -86,9 +86,59 @@ async function extractWordText(buffer: Buffer, extension: 'doc' | 'docx'): Promi
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Word extraction failed';
     if (message.includes('ENOENT') || message.includes('missing textutil/unzip')) {
-      throw new Error('Word file extraction is not available on this runtime. Use .txt/.md/.json/.csv or paste JD text.');
+      throw new Error('Word file extraction is not available on this runtime. Use .txt/.md/.json/.csv/.pdf or paste JD text.');
     }
     throw new Error(`Failed to read .${extension} file. ${message}`);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function extractPdfText(buffer: Buffer): Promise<string> {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'jd-pdf-'));
+  const filePath = path.join(tempDir, `${randomUUID()}.pdf`);
+  try {
+    await fs.writeFile(filePath, buffer);
+
+    try {
+      const { stdout } = await execFileAsync('pdftotext', ['-q', '-layout', filePath, '-']);
+      const text = String(stdout || '').trim();
+      if (text) return text;
+    } catch {
+      // Fall through to python fallback.
+    }
+
+    try {
+      const script = `
+import sys
+from pathlib import Path
+pdf_path = Path(sys.argv[1])
+text = ""
+for module_name in ("pypdf", "PyPDF2"):
+    try:
+        mod = __import__(module_name)
+        Reader = getattr(mod, "PdfReader", None)
+        if Reader is None:
+            continue
+        reader = Reader(str(pdf_path))
+        pages = []
+        for page in reader.pages:
+            pages.append((page.extract_text() or "").strip())
+        text = "\\n\\n".join([p for p in pages if p])
+        if text.strip():
+            break
+    except Exception:
+        continue
+sys.stdout.write(text)
+`;
+      const { stdout } = await execFileAsync('python3', ['-c', script, filePath]);
+      const text = String(stdout || '').trim();
+      if (text) return text;
+    } catch {
+      // Ignore if python or PDF libs unavailable.
+    }
+
+    return '';
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
@@ -101,10 +151,11 @@ async function readJdText(form: FormData): Promise<string> {
   if (fileValue && typeof fileValue !== 'string' && fileValue.size > 0) {
     const isDocx = /\.docx$/i.test(fileValue.name);
     const isDoc = /\.doc$/i.test(fileValue.name);
+    const isPdf = /\.pdf$/i.test(fileValue.name) || fileValue.type === 'application/pdf';
     const textLike = fileValue.type.startsWith('text/') || /\.(txt|md|json|csv)$/i.test(fileValue.name);
-    if (!textLike && !isDocx && !isDoc) {
+    if (!textLike && !isDocx && !isDoc && !isPdf) {
       throw new Error(
-        `Unsupported JD file type: ${fileValue.name}. Upload .txt/.md/.json/.csv/.doc/.docx or paste JD text.`,
+        `Unsupported JD file type: ${fileValue.name}. Upload .txt/.md/.json/.csv/.doc/.docx/.pdf or paste JD text.`,
       );
     }
     const buffer = Buffer.from(await fileValue.arrayBuffer());
@@ -113,6 +164,8 @@ async function readJdText(form: FormData): Promise<string> {
         ? await extractWordText(buffer, 'docx')
         : isDoc
           ? await extractWordText(buffer, 'doc')
+          : isPdf
+            ? await extractPdfText(buffer)
           : decodeTextBuffer(buffer);
     if (!content) {
       throw new Error(`Uploaded JD file ${fileValue.name} appears empty or unreadable.`);
@@ -121,7 +174,7 @@ async function readJdText(form: FormData): Promise<string> {
   }
 
   if (!pasted) {
-    throw new Error('Please paste JD text or upload a supported file (.txt/.md/.json/.csv/.doc/.docx).');
+    throw new Error('Please paste JD text or upload a supported file (.txt/.md/.json/.csv/.doc/.docx/.pdf).');
   }
   return pasted;
 }

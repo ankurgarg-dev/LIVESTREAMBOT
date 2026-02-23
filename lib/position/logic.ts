@@ -14,6 +14,7 @@ import {
   type PositionExtraction,
   type RoleFamily,
   type Level,
+  type SkillCalibrationItem,
 } from './types';
 
 type SkillTagAlias = { canonical: string; aliases: string[] };
@@ -178,6 +179,77 @@ function capStrings(list: string[], max: number): string[] {
   return list.slice(0, max);
 }
 
+function clampPercent(value: unknown, fallback: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  if (n < 0) return 0;
+  if (n > 100) return 100;
+  return Math.round(n);
+}
+
+function extractSkillsFromJdText(jdText: string): string[] {
+  const lowered = String(jdText || '').toLowerCase();
+  if (!lowered) return [];
+  const out: string[] = [];
+  for (const alias of skillAliases) {
+    const candidates = [alias.canonical, ...(alias.aliases || [])].map((v) => String(v || '').toLowerCase()).filter(Boolean);
+    if (candidates.some((candidate) => lowered.includes(candidate))) {
+      out.push(alias.canonical);
+    }
+  }
+  return dedupeStrings(out);
+}
+
+function normalizeSkillCalibration(
+  input: SkillCalibrationItem[] | undefined,
+  mustHaves: string[],
+  niceToHaves: string[],
+): SkillCalibrationItem[] {
+  const rows = Array.isArray(input) ? input : [];
+  const seen = new Set<string>();
+  const out: SkillCalibrationItem[] = [];
+
+  for (const row of rows) {
+    const skill = normalizeItem(String(row?.skill || ''));
+    if (!skill) continue;
+    const key = skill.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const category = row?.category === 'nice_to_have' ? 'nice_to_have' : 'must_have';
+    out.push({
+      skill,
+      category,
+      definition: String(row?.definition || '').trim().slice(0, 260),
+      weight_percent: clampPercent(row?.weight_percent, category === 'must_have' ? 60 : 20),
+    });
+  }
+
+  for (const skill of mustHaves) {
+    const key = skill.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      skill,
+      category: 'must_have',
+      definition: '',
+      weight_percent: 60,
+    });
+  }
+  for (const skill of niceToHaves) {
+    const key = skill.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      skill,
+      category: 'nice_to_have',
+      definition: '',
+      weight_percent: 20,
+    });
+  }
+
+  return out.slice(0, 20);
+}
+
 function normalizeFocusAreas(values: string[]): PositionConfigCore['focus_areas'] {
   const out = dedupeStrings(values.map((v) => v.toLowerCase().replace(/\s+/g, '_'))).filter((v): v is PositionConfigCore['focus_areas'][number] =>
     isOneOf(v, FOCUS_AREAS),
@@ -229,14 +301,27 @@ export function normalizeAndMap(
     jdText: opts.jdText,
     roleTitle: opts.roleTitleOverride || extraction.role_title,
   });
+  const jdSignalSkills = normalizeSkills(
+    [...extractSkillsFromJdText(opts.jdText), ...(extraction.tech_stack || [])],
+    { jdText: opts.jdText, roleTitle: opts.roleTitleOverride || extraction.role_title },
+  );
+  const mustHavesSeed = dedupeStrings([...mustHavesNorm, ...jdSignalSkills]);
   const backfill = normalizeSkills(template.must_haves || [], { jdText: opts.jdText });
-  const mustHaves = capStrings(dedupeStrings([...mustHavesNorm, ...backfill]), 8);
+  const mustHaves = capStrings(
+    mustHavesSeed.length >= 3 ? mustHavesSeed : dedupeStrings([...mustHavesSeed, ...backfill]),
+    8,
+  );
   if (mustHaves.length < 3) {
     missing.add('must_haves');
     warnings.push('Must-haves backfilled from template.');
   }
 
-  const niceToHaves = capStrings(normalizeSkills(extraction.nice_to_haves || [], { jdText: opts.jdText }), 8);
+  const mustSet = new Set(mustHaves.map((x) => x.toLowerCase()));
+  const niceToHavesSeed = dedupeStrings([
+    ...normalizeSkills(extraction.nice_to_haves || [], { jdText: opts.jdText }),
+    ...jdSignalSkills.filter((skill) => !mustSet.has(skill.toLowerCase())),
+  ]);
+  const niceToHaves = capStrings(niceToHavesSeed, 8);
   const techStack = capStrings(normalizeSkills(extraction.tech_stack || template.tech_stack || [], { jdText: opts.jdText }), 15);
 
   const interviewRoundType = isOneOf(extraction.interview_round_type, INTERVIEW_ROUND_TYPES)
@@ -271,6 +356,7 @@ export function normalizeAndMap(
       strictness,
       evaluation_policy: evaluationPolicy,
       notes_for_interviewer: notes,
+      skills_calibration: normalizeSkillCalibration([], mustHaves, niceToHaves),
     },
     missingFields: Array.from(missing),
     warnings,
@@ -287,20 +373,26 @@ export function applyDeterministicMapping(config: PositionConfigCore): PositionC
     ? template.duration_minutes
     : config.duration_minutes;
 
-  const mustHaves = capStrings(
-    dedupeStrings([...normalizeSkills(config.must_haves), ...normalizeSkills(template.must_haves)]),
-    8,
-  );
+  const mustHaves = capStrings(dedupeStrings(normalizeSkills(config.must_haves)), 8);
+  const niceToHaves = capStrings(normalizeSkills(config.nice_to_haves), 8);
+  const effectiveMustHaves =
+    mustHaves.length >= 1 ? mustHaves : capStrings(dedupeStrings(normalizeSkills(template.must_haves)), 8);
+  const effectiveNiceToHaves = niceToHaves;
 
   return {
     ...config,
     archetype_id: archetype,
     duration_minutes: duration,
-    must_haves: mustHaves,
-    nice_to_haves: capStrings(normalizeSkills(config.nice_to_haves), 8),
+    must_haves: effectiveMustHaves,
+    nice_to_haves: effectiveNiceToHaves,
     tech_stack: capStrings(normalizeSkills(config.tech_stack), 15),
     focus_areas: capStrings(config.focus_areas.filter((f): f is PositionConfigCore['focus_areas'][number] => isOneOf(f, FOCUS_AREAS)), 4),
     notes_for_interviewer: String(config.notes_for_interviewer || '').slice(0, 600),
+    skills_calibration: normalizeSkillCalibration(
+      config.skills_calibration,
+      effectiveMustHaves,
+      effectiveNiceToHaves,
+    ),
   };
 }
 

@@ -27,6 +27,14 @@ export type DurationMinutes = (typeof DURATIONS)[number];
 export type DeepDiveMode = (typeof DEEP_DIVE_MODES)[number];
 export type Strictness = (typeof STRICTNESS_LEVELS)[number];
 export type EvaluationPolicy = (typeof EVALUATION_POLICIES)[number];
+export type SkillCategory = 'must_have' | 'nice_to_have';
+
+export type SkillCalibrationItem = {
+  skill: string;
+  category: SkillCategory;
+  definition: string;
+  weight_percent: number;
+};
 
 export type PositionExtraction = {
   role_title: string;
@@ -72,6 +80,7 @@ export type PositionConfigCore = {
   strictness: Strictness;
   evaluation_policy: EvaluationPolicy;
   notes_for_interviewer: string;
+  skills_calibration?: SkillCalibrationItem[];
 };
 
 export type PositionConfigRecord = PositionConfigCore & {

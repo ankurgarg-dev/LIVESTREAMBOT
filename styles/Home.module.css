@@ -349,6 +349,27 @@
   color: #405b6c;
 }
 
+.calibrationRow {
+  display: grid;
+  grid-template-columns: minmax(140px, 180px) minmax(120px, 150px) minmax(240px, 1fr) minmax(140px, 180px) auto;
+  gap: 0.5rem;
+  align-items: center;
+  border: 1px solid #d0e0e8;
+  border-radius: 0.7rem;
+  background: #ffffff;
+  padding: 0.45rem;
+}
+
+.weightControl {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.weightControl input[type='range'] {
+  width: 100%;
+}
+
 @media (max-width: 1020px) {
   .heroCard {
     grid-template-columns: 1fr;
@@ -364,6 +385,10 @@
   }
 
   .scoreSummaryGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .calibrationRow {
     grid-template-columns: 1fr;
   }
 }

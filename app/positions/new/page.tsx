@@ -40,7 +40,7 @@ type PositionRecord = PositionConfigCore & {
   version: number;
 };
 
-const SUPPORTED_JD_FILE_PATTERN = /\.(txt|md|json|csv|doc|docx)$/i;
+const SUPPORTED_JD_FILE_PATTERN = /\.(txt|md|json|csv|doc|docx|pdf)$/i;
 const COMMON_SKILL_SUGGESTIONS = (commonSkillTags as Array<{ canonical: string }>).map((s) => s.canonical);
 
 const ROLE_FAMILY_LABELS: Record<string, string> = {
@@ -321,6 +321,9 @@ export default function NewPositionPage() {
       strictness: position.strictness,
       evaluation_policy: position.evaluation_policy,
       notes_for_interviewer: position.notes_for_interviewer,
+      skills_calibration: Array.isArray(position.skills_calibration)
+        ? position.skills_calibration.map((row) => ({ ...row }))
+        : [],
     });
     setMissingFields(position.missing_fields || []);
     setConfidence(position.extraction_confidence || 0);
@@ -340,7 +343,7 @@ export default function NewPositionPage() {
     const textLike = file.type.startsWith('text/') || SUPPORTED_JD_FILE_PATTERN.test(file.name);
     if (!textLike) {
       setJdFile(null);
-      setError(`Unsupported JD file type: ${file.name}. Use .txt/.md/.json/.csv/.doc/.docx, or paste JD text.`);
+      setError(`Unsupported JD file type: ${file.name}. Use .txt/.md/.json/.csv/.doc/.docx/.pdf, or paste JD text.`);
       event.target.value = '';
       return;
     }
@@ -372,11 +375,11 @@ export default function NewPositionPage() {
         />
         <input
           type="file"
-          accept=".txt,.md,.json,.csv,.doc,.docx,text/plain,text/markdown,application/json,text/csv,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          accept=".txt,.md,.json,.csv,.doc,.docx,.pdf,text/plain,text/markdown,application/json,text/csv,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf"
           onChange={onJdFileChange}
         />
         {jdFile ? <p className={styles.subtle}>{`Selected file: ${jdFile.name}`}</p> : null}
-        <p className={styles.subtle}>Supported upload formats: .txt, .md, .json, .csv, .doc, .docx (or paste JD text).</p>
+        <p className={styles.subtle}>Supported upload formats: .txt, .md, .json, .csv, .doc, .docx, .pdf (or paste JD text).</p>
         <div className={styles.row}>
           <button type="button" className="lk-button" onClick={runPrefill} disabled={loading}>
             {loading ? 'Prefilling...' : 'Prefill from JD'}
