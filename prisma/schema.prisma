@@ -51,3 +51,60 @@ model CandidateApplication {
   @@index([positionId, updatedAt(sort: Desc)])
   @@index([updatedAt(sort: Desc)])
 }
+
+
+model Skill {
+  id            Int              @id @default(autoincrement())
+  canonicalName String           @map("canonical_name")
+  skillType     String           @default("GENERAL") @map("skill_type")
+  status        String           @default("ACTIVE")
+  createdAt     DateTime         @default(now()) @map("created_at")
+  updatedAt     DateTime         @default(now()) @map("updated_at")
+  aliases       SkillAlias[]
+  blockRules    SkillBlockRule[]
+
+  @@index([canonicalName])
+  @@map("skills")
+}
+
+model SkillAlias {
+  id         Int      @id @default(autoincrement())
+  skillId    Int      @map("skill_id")
+  aliasText  String   @map("alias_text")
+  matchType  String   @map("match_type")
+  confidence Float    @default(1.0)
+  tenantId   String?  @map("tenant_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @default(now()) @map("updated_at")
+  skill      Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@index([aliasText])
+  @@index([skillId])
+  @@map("skill_aliases")
+}
+
+model SkillBlockRule {
+  id            Int      @id @default(autoincrement())
+  blocksSkillId Int      @map("blocks_skill_id")
+  patternText   String   @map("pattern_text")
+  matchType     String   @map("match_type")
+  tenantId      String?  @map("tenant_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @default(now()) @map("updated_at")
+  blocksSkill   Skill    @relation(fields: [blocksSkillId], references: [id], onDelete: Cascade)
+
+  @@index([patternText])
+  @@index([blocksSkillId])
+  @@map("skill_block_rules")
+}
+
+model SkillRulesetVersion {
+  id          Int      @id @default(autoincrement())
+  versionName String   @map("version_name")
+  versionHash String   @map("version_hash")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@unique([versionName])
+  @@unique([versionHash])
+  @@map("skill_ruleset_versions")
+}

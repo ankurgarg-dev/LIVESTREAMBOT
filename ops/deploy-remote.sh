@@ -94,8 +94,14 @@ fi
 
 pnpm --version
 pnpm install --frozen-lockfile
-export DATABASE_URL="${DATABASE_URL:-file:./prisma/.runtime/interviewbot.db}"
-mkdir -p ./prisma/.runtime
+if [ -f /etc/bristlecone/app.env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . /etc/bristlecone/app.env
+  set +a
+fi
+export DATABASE_URL="${DATABASE_URL:-file:/opt/bristlecone-app/prisma/prisma/.runtime/interviewbot.db}"
+mkdir -p ./prisma/.runtime ./prisma/prisma/.runtime
 pnpm prisma:generate
 pnpm prisma:push
 pnpm build
