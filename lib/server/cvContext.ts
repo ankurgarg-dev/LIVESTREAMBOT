@@ -218,6 +218,63 @@ function buildCandidateContext(rawText: string): string {
   return compactText(parts.join('\n'), 3800);
 }
 
+function guessCandidateEmail(text: string): string {
+  const match = String(text || '').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return match ? match[0].trim().toLowerCase() : '';
+}
+
+function guessCandidateName(text: string): string {
+  const lines = String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (const line of lines.slice(0, 18)) {
+    if (line.length < 4 || line.length > 60) continue;
+    if (/[@|]/.test(line)) continue;
+    if (/\b(resume|curriculum vitae|cv|profile|summary|experience|education|skills|contact)\b/i.test(line)) continue;
+    if (/[^a-zA-Z.\-' ]/.test(line)) continue;
+    const words = line.split(/\s+/).filter(Boolean);
+    if (words.length < 2 || words.length > 4) continue;
+    if (!words.every((w) => /^[A-Za-z][A-Za-z.\-']*$/.test(w))) continue;
+    return line.replace(/\s+/g, ' ');
+  }
+  return '';
+}
+
+async function readUploadedDocumentText(file: UploadedFile): Promise<string> {
+  const name = String(file.name || '').toLowerCase();
+  const buffer = Buffer.from(await file.arrayBuffer());
+  if (/\.docx$/.test(name)) {
+    return await extractWordText(buffer, 'docx');
+  }
+  if (/\.doc$/.test(name)) {
+    return await extractWordText(buffer, 'doc');
+  }
+  if (/\.txt$/.test(name) || file.type.startsWith('text/')) {
+    return decodeTextBuffer(buffer);
+  }
+  if (/\.pdf$/.test(name) || file.type === 'application/pdf') {
+    return await extractPdfText(buffer);
+  }
+  return '';
+}
+
+export async function extractCandidateProfileFromUpload(file: UploadedFile | null | undefined): Promise<{
+  candidateContext: string;
+  candidateName: string;
+  candidateEmail: string;
+}> {
+  if (!file || file.size <= 0) {
+    return { candidateContext: '', candidateName: '', candidateEmail: '' };
+  }
+  const rawText = await readUploadedDocumentText(file).catch(() => '');
+  return {
+    candidateContext: buildCandidateContext(rawText),
+    candidateName: guessCandidateName(rawText),
+    candidateEmail: guessCandidateEmail(rawText),
+  };
+}
+
 export function buildRoleContextFromPosition(
   positionSnapshot: InterviewPositionSnapshot | undefined,
   fallbackJobTitle = '',
@@ -245,21 +302,6 @@ export function buildRoleContextFromPosition(
 }
 
 export async function extractCandidateContextFromUpload(file: UploadedFile | null | undefined): Promise<string> {
-  if (!file || file.size <= 0) return '';
-  const name = String(file.name || '').toLowerCase();
-  const buffer = Buffer.from(await file.arrayBuffer());
-  let text = '';
-  if (/\.docx$/.test(name)) {
-    text = await extractWordText(buffer, 'docx');
-  } else if (/\.doc$/.test(name)) {
-    text = await extractWordText(buffer, 'doc');
-  } else if (/\.txt$/.test(name) || file.type.startsWith('text/')) {
-    text = decodeTextBuffer(buffer);
-  } else if (/\.pdf$/.test(name) || file.type === 'application/pdf') {
-    text = await extractPdfText(buffer);
-  } else {
-    // Other binaries are currently not parsed in this lightweight path.
-    text = '';
-  }
-  return buildCandidateContext(text);
+  const profile = await extractCandidateProfileFromUpload(file);
+  return profile.candidateContext;
 }

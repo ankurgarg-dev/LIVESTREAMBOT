@@ -125,7 +125,7 @@ COMMAND_ID="$(aws ssm send-command \
   --region "${AWS_REGION}" \
   --query "Command.CommandId" \
   --output text \
-  --parameters commands="$(jq -nc --arg script "${REMOTE_SCRIPT}" '[ $script ]')")"
+  --parameters commands="$(jq -nc --arg script "${REMOTE_SCRIPT}" '$script | split("\n")')")"
 
 echo "CommandId: ${COMMAND_ID}"
 

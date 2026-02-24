@@ -39,9 +39,9 @@ install_base() {
     sudo apt-get update -y
     sudo apt-get install -y git curl jq ca-certificates nodejs npm
   elif command -v dnf >/dev/null 2>&1; then
-    sudo dnf install -y git curl jq ca-certificates nodejs npm
+    sudo dnf install -y git jq ca-certificates nodejs npm
   elif command -v yum >/dev/null 2>&1; then
-    sudo yum install -y git curl jq ca-certificates nodejs npm
+    sudo yum install -y git jq ca-certificates nodejs npm
   fi
 }
 
@@ -93,7 +93,7 @@ COMMAND_ID="$(aws ssm send-command \
   --region "${AWS_REGION}" \
   --query "Command.CommandId" \
   --output text \
-  --parameters commands="$(jq -nc --arg script "${REMOTE_SCRIPT}" '[ $script ]')")"
+  --parameters commands="$(jq -nc --arg script "${REMOTE_SCRIPT}" '$script | split("\n")')")"
 
 echo "CommandId: ${COMMAND_ID}"
 
