@@ -47,6 +47,7 @@ export interface BristleconeVideoConferenceProps extends React.HTMLAttributes<HT
 }
 
 type AgentOrbVariant = 'classic' | 'realtime_screening';
+type AgentTransportMode = 'realtime_ws' | 'turn_based' | 'unknown';
 
 function formatDuration(totalSeconds: number): string {
   const hours = Math.floor(totalSeconds / 3600);
@@ -535,6 +536,8 @@ export function BristleconeVideoConference({
   }, [tracks]);
   const room = useRoomContext();
   const [isInterviewPaused, setIsInterviewPaused] = React.useState(false);
+  const [agentTransportMode, setAgentTransportMode] = React.useState<AgentTransportMode>('unknown');
+  const [agentFullDuplex, setAgentFullDuplex] = React.useState(false);
 
   React.useEffect(() => {
     const onDataReceived = (payload: Uint8Array) => {
@@ -544,6 +547,9 @@ export function BristleconeVideoConference({
         const parsed = JSON.parse(text);
         if (parsed?.type === 'agent_control_state') {
           setIsInterviewPaused(Boolean(parsed?.paused));
+          const mode = String(parsed?.transportMode || '').trim();
+          setAgentTransportMode(mode === 'realtime_ws' ? 'realtime_ws' : mode === 'turn_based' ? 'turn_based' : 'unknown');
+          setAgentFullDuplex(Boolean(parsed?.fullDuplex));
         }
       } catch {
         // Ignore non-JSON control payloads.
@@ -574,6 +580,12 @@ export function BristleconeVideoConference({
   const layoutContext = useCreateLayoutContext();
   const focusTrack = usePinnedTracks(layoutContext)?.[0];
   const carouselTracks = tracks.filter((track) => !sameTrackRef(track, focusTrack));
+  const transportLabel =
+    agentTransportMode === 'realtime_ws'
+      ? `Agent Transport: Realtime WS (${agentFullDuplex ? 'Full Duplex' : 'Realtime'})`
+      : agentTransportMode === 'turn_based'
+        ? 'Agent Transport: Turn-based (Half Duplex)'
+        : 'Agent Transport: Detecting...';
 
   return (
     <div className="lk-video-conference" {...props}>
@@ -585,6 +597,25 @@ export function BristleconeVideoConference({
         }}
       >
         <div className="lk-video-conference-inner">
+          <div
+            style={{
+              alignSelf: 'center',
+              marginBottom: '0.5rem',
+              padding: '0.3rem 0.7rem',
+              borderRadius: '999px',
+              border: '1px solid rgba(120, 120, 120, 0.45)',
+              background:
+                agentTransportMode === 'realtime_ws'
+                  ? 'rgba(16, 185, 129, 0.15)'
+                  : agentTransportMode === 'turn_based'
+                    ? 'rgba(245, 158, 11, 0.15)'
+                    : 'rgba(100, 116, 139, 0.15)',
+              fontSize: '0.82rem',
+              fontWeight: 600,
+            }}
+          >
+            {transportLabel}
+          </div>
           {!focusTrack ? (
             <div className="lk-grid-layout-wrapper">
               <GridLayout tracks={tracks}>

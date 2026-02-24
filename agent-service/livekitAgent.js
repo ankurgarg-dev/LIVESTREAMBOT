@@ -887,6 +887,7 @@ async function createAgentSession(
     realtimeWs.on('session.updated', () => {
       realtimeReady = true;
       console.log(`[agent][${roomName}] realtime session ready`);
+      void publishPauseState();
     });
 
     realtimeWs.on('input_audio_buffer.speech_started', () => {
@@ -1263,11 +1264,16 @@ async function createAgentSession(
   };
 
   const publishPauseState = async () => {
+    const transportMode = isRealtimeDuplexAgent && realtimeReady ? 'realtime_ws' : 'turn_based';
     try {
       const payload = Buffer.from(
         JSON.stringify({
           type: 'agent_control_state',
           paused: isInterviewPaused,
+          agentType: selectedAgentType,
+          transportMode,
+          fullDuplex: transportMode === 'realtime_ws',
+          realtimeReady: Boolean(realtimeReady),
           ts: nowIso(),
         }),
       );
