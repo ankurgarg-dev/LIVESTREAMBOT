@@ -6,6 +6,12 @@ const os = require('node:os');
 const path = require('node:path');
 const readline = require('node:readline');
 const OpenAI = require('openai');
+let OpenAIRealtimeWS = null;
+try {
+  ({ OpenAIRealtimeWS } = require('openai/beta/realtime/ws'));
+} catch {
+  OpenAIRealtimeWS = null;
+}
 const { AccessToken } = require('livekit-server-sdk');
 const {
   AudioSource,
@@ -20,7 +26,7 @@ const {
 } = require('@livekit/rtc-node');
 
 const { LLMService } = require('./llmService');
-const { TTSService } = require('./ttsService');
+const { TTSService, resampleInt16Mono } = require('./ttsService');
 const {
   getDefaultClassicInterviewPrompt,
   getDefaultRealtimeScreeningPrompt,
@@ -56,6 +62,7 @@ const AUDIO_PUMP_MAX_QUEUE_SECONDS = getNumberEnv('AUDIO_PUMP_MAX_QUEUE_SECONDS'
   min: 0.1,
   max: 5,
 });
+const REALTIME_IO_SAMPLE_RATE = 24000;
 const TEXT_DECODER = new TextDecoder();
 const STT_SAMPLE_RATE = 16000;
 const STT_CHANNELS = 1;
@@ -114,6 +121,10 @@ const STT_MIN_TRANSCRIBE_MS = getNumberEnv(
 const STT_GRACE_MS = getNumberEnv('STT_GRACE_MS', DEFAULT_STT_GRACE_MS, {
   min: 0,
   max: 10000,
+});
+const REALTIME_SERVER_VAD_THRESHOLD = getNumberEnv('REALTIME_SERVER_VAD_THRESHOLD', 0.45, {
+  min: 0.1,
+  max: 0.95,
 });
 
 class PcmAudioPump {
@@ -221,6 +232,16 @@ function int16ToBufferLE(int16) {
   const out = Buffer.alloc(int16.length * 2);
   for (let i = 0; i < int16.length; i += 1) {
     out.writeInt16LE(int16[i], i * 2);
+  }
+  return out;
+}
+
+function bufferLeToInt16(buffer) {
+  if (!buffer || buffer.length === 0) return new Int16Array(0);
+  const sampleCount = Math.floor(buffer.length / 2);
+  const out = new Int16Array(sampleCount);
+  for (let i = 0; i < sampleCount; i += 1) {
+    out[i] = buffer.readInt16LE(i * 2);
   }
   return out;
 }
@@ -763,6 +784,10 @@ async function createAgentSession(
   let processingInputQueue = false;
   let queueWorker = Promise.resolve();
   const inputQueue = [];
+  const isRealtimeDuplexAgent = selectedAgentType === AGENT_TYPE_REALTIME_SCREENING;
+  let realtimeWs = null;
+  let realtimeReady = false;
+  const assistantTranscriptByItemId = new Map();
   const appBaseUrls = getAppBaseUrls();
   let lastGoodAppBaseUrl = appBaseUrls[0] || '';
   const apiRequestTimeoutMs = Math.max(1200, Number(process.env.AGENT_API_TIMEOUT_MS || 3500));
@@ -771,6 +796,9 @@ async function createAgentSession(
     if (assistantState === 'idle') return;
     interruptRequested = true;
     if (audioPump) audioPump.clear();
+    if (realtimeReady && realtimeWs) {
+      realtimeWs.send({ type: 'response.cancel' });
+    }
   };
 
   const fetchAppApi = async (pathName, options = {}) => {
@@ -804,6 +832,118 @@ async function createAgentSession(
   const appendTranscript = (entry) => {
     transcript.push(entry);
     if (transcript.length > 220) transcript.splice(0, transcript.length - 220);
+  };
+
+  const getRuntimeInstruction = () =>
+    INTERVIEW_MODE
+      ? agent.buildRuntimeInstruction({
+          candidateContext,
+          roleContext,
+        })
+      : fallbackRuntimeInstruction;
+
+  const sendRealtimeSessionUpdate = () => {
+    if (!realtimeWs) return;
+    realtimeWs.send({
+      type: 'session.update',
+      session: {
+        modalities: ['audio', 'text'],
+        instructions: getRuntimeInstruction(),
+        voice: ttsVoice,
+        input_audio_format: 'pcm16',
+        output_audio_format: 'pcm16',
+        input_audio_transcription: {
+          model: 'whisper-1',
+        },
+        turn_detection: {
+          type: 'server_vad',
+          create_response: true,
+          interrupt_response: true,
+          threshold: REALTIME_SERVER_VAD_THRESHOLD,
+          silence_duration_ms: Math.max(300, Math.min(1200, sttTurnConfig.maxSilenceMs)),
+          prefix_padding_ms: 300,
+        },
+      },
+    });
+  };
+
+  const ensureRealtimeDuplex = async () => {
+    if (!isRealtimeDuplexAgent || realtimeReady) return;
+    if (!OpenAIRealtimeWS) {
+      throw new Error('OpenAI realtime websocket dependency unavailable (module openai/beta/realtime/ws)');
+    }
+
+    const model = agent.getLlmModel();
+    realtimeWs = new OpenAIRealtimeWS({ model }, new OpenAI({ apiKey: process.env.OPENAI_API_KEY }));
+
+    realtimeWs.on('error', (err) => {
+      console.error(`[agent][${roomName}] realtime websocket error:`, err?.message || err);
+    });
+
+    realtimeWs.on('session.created', () => {
+      sendRealtimeSessionUpdate();
+    });
+
+    realtimeWs.on('session.updated', () => {
+      realtimeReady = true;
+      console.log(`[agent][${roomName}] realtime session ready`);
+    });
+
+    realtimeWs.on('input_audio_buffer.speech_started', () => {
+      assistantState = 'idle';
+      if (audioPump) audioPump.clear();
+    });
+
+    realtimeWs.on('conversation.item.input_audio_transcription.completed', async (event) => {
+      const text = String(event?.transcript || '').trim();
+      if (!text || isInterviewPaused) return;
+      await ensureInterviewStarted().catch(() => undefined);
+      appendTranscript({ role: 'candidate', by: 'participant', text, ts: nowIso() });
+      console.log(`\n[user][${roomName}] ${text}`);
+    });
+
+    realtimeWs.on('response.audio_transcript.delta', (event) => {
+      const itemId = String(event?.item_id || '').trim();
+      if (!itemId) return;
+      const prev = assistantTranscriptByItemId.get(itemId) || '';
+      assistantTranscriptByItemId.set(itemId, prev + String(event?.delta || ''));
+    });
+
+    realtimeWs.on('response.audio_transcript.done', (event) => {
+      const itemId = String(event?.item_id || '').trim();
+      const finalText = String(event?.transcript || '').trim();
+      const fallback = itemId ? String(assistantTranscriptByItemId.get(itemId) || '').trim() : '';
+      const text = finalText || fallback;
+      if (itemId) assistantTranscriptByItemId.delete(itemId);
+      if (text && !isInterviewPaused) {
+        appendTranscript({ role: 'assistant', by: selectedBotName, text, ts: nowIso() });
+      }
+    });
+
+    realtimeWs.on('response.audio.delta', async (event) => {
+      if (!audioPump || isInterviewPaused) return;
+      const b64 = String(event?.delta || '');
+      if (!b64) return;
+
+      assistantState = 'speaking';
+      const pcm24k = Buffer.from(b64, 'base64');
+      if (!pcm24k.length) return;
+      const inputSamples = bufferLeToInt16(pcm24k);
+      const outputSamples = resampleInt16Mono(inputSamples, REALTIME_IO_SAMPLE_RATE, TARGET_SAMPLE_RATE);
+      await audioPump.writePcm16le(int16ToBufferLE(outputSamples));
+    });
+
+    realtimeWs.on('response.done', () => {
+      assistantState = 'idle';
+    });
+
+    const readyDeadline = Date.now() + 10000;
+    while (!realtimeReady && Date.now() < readyDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    if (!realtimeReady) {
+      throw new Error('Timed out waiting for realtime session initialization');
+    }
   };
 
   const buildTranscriptText = () =>
@@ -1146,12 +1286,7 @@ async function createAgentSession(
       sourceIdentity === 'agent_bootstrap'
         ? 'Start the interview now with a warm intro, set expectations, and ask for consent to begin.'
         : trimmed;
-    const runtimeInstruction = INTERVIEW_MODE
-      ? agent.buildRuntimeInstruction({
-          candidateContext,
-          roleContext,
-        })
-      : fallbackRuntimeInstruction;
+    const runtimeInstruction = getRuntimeInstruction();
 
     if (sourceIdentity !== 'agent_bootstrap' && !isInterviewPaused) {
       console.log(`\n[user][${roomName}] ${trimmed}`);
@@ -1162,6 +1297,28 @@ async function createAgentSession(
     process.stdout.write(`[assistant][${roomName}] `);
 
     if (seq > 0 && seq < latestInputSeq) {
+      assistantState = 'idle';
+      return;
+    }
+
+    if (isRealtimeDuplexAgent) {
+      if (!realtimeReady || !realtimeWs) {
+        await ensureRealtimeDuplex();
+      }
+      realtimeWs.send({
+        type: 'conversation.item.create',
+        item: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: userMessage }],
+        },
+      });
+      realtimeWs.send({
+        type: 'response.create',
+        response: {
+          modalities: ['audio', 'text'],
+        },
+      });
       assistantState = 'idle';
       return;
     }
@@ -1231,6 +1388,44 @@ async function createAgentSession(
   const startRemoteAudioTranscription = (track, participant) => {
     const streamKey = `${participant.identity}:${track.sid ?? 'audio'}`;
     if (activeInputStreams.has(streamKey)) return;
+
+    if (isRealtimeDuplexAgent) {
+      const stream = new AudioStream(track, {
+        sampleRate: REALTIME_IO_SAMPLE_RATE,
+        numChannels: STT_CHANNELS,
+        frameSizeMs: 20,
+      });
+      const reader = stream.getReader();
+      const readLoop = (async () => {
+        try {
+          if (!realtimeReady) {
+            await ensureRealtimeDuplex();
+          }
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (!value || !value.data || value.data.length === 0) continue;
+            if (isInterviewPaused || !realtimeReady || !realtimeWs) continue;
+
+            const pcm = int16ToBufferLE(value.data);
+            realtimeWs.send({
+              type: 'input_audio_buffer.append',
+              audio: pcm.toString('base64'),
+            });
+          }
+        } catch (err) {
+          console.error(`[rt][${roomName}][${participant.identity}] audio stream error:`, err);
+        }
+      })();
+
+      activeInputStreams.set(streamKey, {
+        reader,
+        turnDetector: null,
+        readLoop,
+      });
+      console.log(`[rt][${roomName}] streaming duplex audio for '${participant.identity}'`);
+      return;
+    }
 
     const stream = new AudioStream(track, {
       sampleRate: STT_SAMPLE_RATE,
@@ -1308,6 +1503,9 @@ async function createAgentSession(
     const text = parsed.text;
     if (parsed.contextUpdated) {
       console.log(`[agent][${roomName}] updated candidate/role context from data payload`);
+      if (isRealtimeDuplexAgent && realtimeWs) {
+        sendRealtimeSessionUpdate();
+      }
     }
     if (!text) return;
 
@@ -1354,6 +1552,9 @@ async function createAgentSession(
   audioPump = new PcmAudioPump(audioSource, {
     maxQueueSeconds: AUDIO_PUMP_MAX_QUEUE_SECONDS,
   });
+  if (isRealtimeDuplexAgent) {
+    await ensureRealtimeDuplex();
+  }
 
   if (process.env.SIMULATED_INPUT && process.env.SIMULATED_INPUT.trim()) {
     queueUserTurn(process.env.SIMULATED_INPUT, 'simulated');
@@ -1414,6 +1615,11 @@ async function createAgentSession(
     });
     if (audioPump) {
       await audioPump.stop();
+    }
+    if (realtimeWs) {
+      realtimeWs.close({ code: 1000, reason: 'session_stopped' });
+      realtimeWs = null;
+      realtimeReady = false;
     }
 
     try {
