@@ -4,6 +4,7 @@ import {
   parseJsonWithFallback,
   validateExtractionShape,
 } from '@/lib/position/logic';
+import { buildSkillTypeByName } from '@/lib/server/skillTypeMap';
 import type {
   DeepDiveMode,
   EvaluationPolicy,
@@ -259,13 +260,18 @@ export async function extractAndPrefillPosition(input: {
   const roleTitle = String(input.roleTitle || '').trim();
   const jdText = String(input.jdText || '').trim();
   const inferredRoleTitle = roleTitle || inferRoleTitleFromJd(jdText);
+  const skillTypeByName = await buildSkillTypeByName();
 
   if (!jdText) {
     const fallback = fallbackExtraction(inferredRoleTitle, jdText);
-    const normalized = normalizeAndMap(fallback, { jdText, roleTitleOverride: roleTitle || inferredRoleTitle });
+    const normalized = normalizeAndMap(fallback, {
+      jdText,
+      roleTitleOverride: roleTitle || inferredRoleTitle,
+      skillTypeByName,
+    });
     return {
       rawExtraction: fallback,
-      normalizedPrefill: applyDeterministicMapping(normalized.prefill),
+      normalizedPrefill: applyDeterministicMapping(normalized.prefill, { skillTypeByName }),
       extractionConfidence: normalized.confidence,
       missingFields: normalized.missingFields,
       warnings: ['JD was empty, fallback prefill used.'],
@@ -291,7 +297,11 @@ export async function extractAndPrefillPosition(input: {
     }
   } catch (error) {
     const fallback = fallbackExtraction(inferredRoleTitle, jdText);
-    const normalized = normalizeAndMap(fallback, { jdText, roleTitleOverride: roleTitle || inferredRoleTitle });
+    const normalized = normalizeAndMap(fallback, {
+      jdText,
+      roleTitleOverride: roleTitle || inferredRoleTitle,
+      skillTypeByName,
+    });
     return {
       rawExtraction: {
         ...fallback,
@@ -299,7 +309,7 @@ export async function extractAndPrefillPosition(input: {
           level: 'Fallback path',
         },
       },
-      normalizedPrefill: applyDeterministicMapping(normalized.prefill),
+      normalizedPrefill: applyDeterministicMapping(normalized.prefill, { skillTypeByName }),
       extractionConfidence: normalized.confidence,
       missingFields: normalized.missingFields,
       warnings: ['LLM extraction failed. Fallback prefill used.'],
@@ -342,8 +352,12 @@ export async function extractAndPrefillPosition(input: {
     }
   }
 
-  const normalized = normalizeAndMap(typed, { jdText, roleTitleOverride: roleTitle || inferredRoleTitle });
-  const mapped = applyDeterministicMapping(normalized.prefill);
+  const normalized = normalizeAndMap(typed, {
+    jdText,
+    roleTitleOverride: roleTitle || inferredRoleTitle,
+    skillTypeByName,
+  });
+  const mapped = applyDeterministicMapping(normalized.prefill, { skillTypeByName });
 
   return {
     rawExtraction: typed,

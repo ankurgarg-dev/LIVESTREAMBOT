@@ -4,6 +4,21 @@
   gap: 18px;
 }
 
+.topBar {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.homeButton {
+  border: 1px solid #7da9c8;
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: #e7f2fb;
+  color: #1d4058;
+  text-decoration: none;
+  font-weight: 600;
+}
+
 .panel {
   border: 1px solid #c8d6e5;
   border-radius: 14px;

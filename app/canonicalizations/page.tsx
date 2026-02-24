@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import styles from './page.module.css';
 
@@ -357,6 +358,11 @@ export default function CanonicalizationsPage() {
 
   return (
     <div className={styles.page}>
+      <div className={styles.topBar}>
+        <Link href="/" className={styles.homeButton}>
+          Home
+        </Link>
+      </div>
       <h1>Canonical Skills Manager</h1>
 
       <section className={styles.panel}>

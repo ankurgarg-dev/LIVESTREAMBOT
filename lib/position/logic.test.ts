@@ -35,6 +35,22 @@ function sampleExtraction(partial: Partial<PositionExtraction> = {}): PositionEx
   };
 }
 
+const mappedSkillTypes: Record<string, string> = {
+  java: 'language',
+  j2ee: 'framework',
+  docker: 'tool',
+  kubernetes: 'platform',
+  aws: 'platform',
+  kafka: 'tool',
+  terraform: 'tool',
+  fastapi: 'framework',
+  datadog: 'tool',
+  qdrant: 'tool',
+  'system design': 'concept',
+  microservices: 'concept',
+  sql: 'language',
+};
+
 describe('validateExtractionShape', () => {
   it('accepts valid extraction payload', () => {
     const valid = validateExtractionShape(sampleExtraction());
@@ -89,7 +105,7 @@ Preferred Qualifications
         nice_to_haves: [],
         tech_stack: [],
       }),
-      { jdText },
+      { jdText, skillTypeByName: mappedSkillTypes },
     );
 
     expect(res.prefill.must_haves).toEqual(expect.arrayContaining(['Java', 'Spring Boot', 'Microservices', 'AWS', 'Kafka']));
@@ -181,10 +197,102 @@ Required Qualifications
         nice_to_haves: [],
         tech_stack: [],
       }),
-      { jdText },
+      { jdText, skillTypeByName: mappedSkillTypes },
     );
     expect(res.prefill.tech_stack).toEqual(
-      expect.arrayContaining(['Java', 'J2EE', 'Microservices', 'REST APIs', 'Docker', 'Kubernetes', 'AWS', 'Kafka', 'Terraform']),
+      expect.arrayContaining(['Java', 'J2EE', 'Docker', 'Kubernetes', 'AWS', 'Kafka', 'Terraform']),
+    );
+    expect(res.prefill.tech_stack).not.toEqual(expect.arrayContaining(['Microservices', 'REST APIs']));
+  });
+
+  it('excludes concept-type skills from tech stack', () => {
+    const res = normalizeAndMap(
+      sampleExtraction({
+        tech_stack: ['System Design', 'Microservices'],
+      }),
+      { jdText: 'Must have: system design and microservices.', skillTypeByName: mappedSkillTypes },
+    );
+    expect(res.prefill.tech_stack).not.toEqual(expect.arrayContaining(['System Design', 'Microservices']));
+  });
+
+  it('includes mapped tool/platform/framework/database skills in tech stack', () => {
+    const res = normalizeAndMap(
+      sampleExtraction({
+        tech_stack: ['Docker', 'AWS', 'FastAPI', 'Datadog', 'Qdrant'],
+      }),
+      { jdText: '', skillTypeByName: mappedSkillTypes },
+    );
+    expect(res.prefill.tech_stack).toEqual(expect.arrayContaining(['Docker', 'AWS', 'FastAPI', 'Datadog', 'Qdrant']));
+  });
+
+  it('dedupes alias-like duplicates in tech stack (K8s/Kubernetes)', () => {
+    const res = normalizeAndMap(
+      sampleExtraction({
+        tech_stack: ['K8s', 'Kubernetes'],
+      }),
+      { jdText: '' },
+    );
+    expect(res.prefill.tech_stack.filter((x) => x === 'Kubernetes').length).toBe(1);
+  });
+
+  it('does not infer Java from JavaScript token', () => {
+    const normalized = normalizeSkills(['JavaScript']);
+    expect(normalized).toContain('JavaScript');
+    expect(normalized).not.toContain('Java');
+  });
+
+  it('includes language in tech stack only for runtime allowlist or tech-section evidence', () => {
+    const nonTechSectionRes = normalizeAndMap(
+      sampleExtraction({
+        tech_stack: [],
+      }),
+      {
+        jdText: `
+Required Qualifications
+- Java
+- SQL
+`,
+        skillTypeByName: mappedSkillTypes,
+      },
+    );
+    expect(nonTechSectionRes.prefill.tech_stack).toContain('Java');
+    expect(nonTechSectionRes.prefill.tech_stack).not.toContain('SQL');
+
+    const techSectionRes = normalizeAndMap(
+      sampleExtraction({
+        tech_stack: [],
+      }),
+      {
+        jdText: `
+Tech Stack:
+- SQL
+`,
+        skillTypeByName: mappedSkillTypes,
+      },
+    );
+    expect(techSectionRes.prefill.tech_stack).toContain('SQL');
+  });
+
+  it('adds overlap metadata for tech stack entries', () => {
+    const res = normalizeAndMap(
+      sampleExtraction({
+        tech_stack: ['Docker', 'AWS'],
+      }),
+      {
+        jdText: `
+Required Qualifications
+- Docker
+Preferred Qualifications
+- AWS
+`,
+      },
+    );
+    expect(res.prefill.tech_stack_meta).toBeDefined();
+    expect(res.prefill.tech_stack_meta).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ skill: 'Docker', alsoInMustHave: true }),
+        expect.objectContaining({ skill: 'AWS', alsoInNiceToHave: true }),
+      ]),
     );
   });
 });

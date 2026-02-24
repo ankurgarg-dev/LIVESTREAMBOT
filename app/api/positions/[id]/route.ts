@@ -2,6 +2,7 @@ import { applyDeterministicMapping, deepDiff } from '@/lib/position/logic';
 import type { PositionConfigCore } from '@/lib/position/types';
 import { deletePosition, getPosition, updatePosition } from '@/lib/server/positionStore';
 import { canonicalizeSkillList } from '@/lib/server/skillCanonicalization';
+import { buildSkillTypeByName } from '@/lib/server/skillTypeMap';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function GET(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -28,8 +29,9 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
     const current = await getPosition(id);
     if (!current) return NextResponse.json({ ok: false, error: 'Position not found' }, { status: 404 });
 
-    const finalMapped = applyDeterministicMapping(body.finalConfig);
-    const prefillMapped = applyDeterministicMapping(current.normalized_prefill);
+    const skillTypeByName = await buildSkillTypeByName();
+    const finalMapped = applyDeterministicMapping(body.finalConfig, { skillTypeByName });
+    const prefillMapped = applyDeterministicMapping(current.normalized_prefill, { skillTypeByName });
     const diff = deepDiff(prefillMapped, finalMapped) ?? {};
 
     const [mustCanonical, niceCanonical, techCanonical] = await Promise.all([

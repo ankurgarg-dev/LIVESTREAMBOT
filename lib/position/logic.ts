@@ -8,6 +8,7 @@ import {
   type PositionConfigCore,
   type PositionExtraction,
   type SkillCalibrationItem,
+  type TechStackMetaItem,
 } from './types';
 const DEFAULT_DURATION = 60;
 const JD_SKILL_PATTERNS: Array<[RegExp, string]> = [
@@ -21,6 +22,7 @@ const JD_SKILL_PATTERNS: Array<[RegExp, string]> = [
   [/\bmicro[\s-]*services?\b/i, 'Microservices'],
   [/\bdistributed computing\b|\bdistributed systems?\b/i, 'Distributed Computing'],
   [/\brest(ful)?\b|\brest apis?\b/i, 'REST APIs'],
+  [/\bsql\b/i, 'SQL'],
   [/\bnosql\b/i, 'NoSQL'],
   [/\bmq\b|\bmessage queue\b/i, 'MQ'],
   [/\bkafka\b/i, 'Kafka'],
@@ -46,6 +48,30 @@ const NON_TECH_STACK_SKILLS = new Set([
   'Technical Leadership',
   'Coding Fundamentals',
 ]);
+const TECH_STACK_TYPES = new Set(['tool', 'platform', 'framework', 'database']);
+const RUNTIME_LANGUAGE_ALLOWLIST = new Set([
+  'java',
+  'javascript',
+  'typescript',
+  'python',
+  'ruby',
+  'go',
+  'c#',
+  'csharp',
+  'scala',
+  'kotlin',
+  'groovy',
+]);
+const STACK_SECTION_PATTERN = /\b(tech stack|technology stack|tools?|tooling|environment|platforms?)\b/i;
+type SkillEvidenceSection = 'neutral' | 'must' | 'nice' | 'tech';
+type TechStackCandidate = {
+  skillId?: number | null;
+  canonicalName?: string | null;
+  skillType?: string | null;
+  displayText: string;
+  evidenceSection?: SkillEvidenceSection;
+  sourceSection?: SkillEvidenceSection;
+};
 
 function isOneOf<T extends string | number>(value: unknown, source: readonly T[]): value is T {
   return source.includes(value as T);
@@ -126,11 +152,104 @@ function normalizeItem(text: string): string {
   return text.trim().replace(/\s+/g, ' ');
 }
 
+function normalizeLookupKey(text: string): string {
+  return normalizeItem(text).toLowerCase();
+}
+
+function normalizeSkillType(skillType: unknown): string | null {
+  const normalized = normalizeLookupKey(String(skillType || ''));
+  if (!normalized) return null;
+  if (
+    normalized === 'language' ||
+    normalized === 'framework' ||
+    normalized === 'concept' ||
+    normalized === 'tool' ||
+    normalized === 'platform' ||
+    normalized === 'database' ||
+    normalized === 'domain' ||
+    normalized === 'methodology' ||
+    normalized === 'general'
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function resolveSkillTypeFromMap(
+  skillTypeByName: Record<string, string> | undefined,
+  canonicalName: string,
+  displayText: string,
+): string | null {
+  if (!skillTypeByName) return null;
+  const byCanonical = skillTypeByName[normalizeLookupKey(canonicalName)];
+  if (byCanonical) return byCanonical;
+  const byDisplay = skillTypeByName[normalizeLookupKey(displayText)];
+  if (byDisplay) return byDisplay;
+  return null;
+}
+
+function dedupeKeyForSkill(skillId: number | null | undefined, text: string): string {
+  if (typeof skillId === 'number') return `id:${skillId}`;
+  return `txt:${normalizeLookupKey(text)}`;
+}
+
+function isRuntimeLanguageSkill(text: string): boolean {
+  const normalized = normalizeLookupKey(text);
+  return RUNTIME_LANGUAGE_ALLOWLIST.has(normalized);
+}
+
+function isConceptLikeSkill(text: string): boolean {
+  const normalized = normalizeLookupKey(text);
+  return (
+    /\b(system design|microservices?|distributed systems?|distributed computing|object oriented|design patterns?|data structures?|coding fundamentals)\b/i.test(
+      normalized,
+    ) || NON_TECH_STACK_SKILLS.has(normalizeCaseToken(text))
+  );
+}
+
+function looksLikeToolOrPlatform(text: string): boolean {
+  const normalized = normalizeLookupKey(text);
+  if (!normalized) return false;
+  if (
+    /\b(docker|kubernetes|terraform|cloudformation|jenkins|github actions|gitlab|datadog|splunk|grafana|dynatrace|fastapi|uvicorn|langchain|qdrant)\b/i.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\b(aws|azure|gcp|google cloud platform|lambda|ecs|eks|s3|rds|dynamodb|iam|cloudwatch)\b/i.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+  if (normalized.endsWith('db') || normalized.includes('api') || normalized.includes('sdk')) return true;
+  return false;
+}
+
+function dedupeBySkillKey(items: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    const normalized = normalizeItem(item);
+    if (!normalized) continue;
+    const key = dedupeKeyForSkill(null, normalized);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(normalized);
+  }
+  return out;
+}
+
 function normalizeCaseToken(text: string): string {
   if (!text) return '';
   const specialTokenMap: Record<string, string> = {
     APIS: 'APIs',
     GENAI: 'GenAI',
+    JAVASCRIPT: 'JavaScript',
+    TYPESCRIPT: 'TypeScript',
+    FASTAPI: 'FastAPI',
   };
   const upperAcronyms = new Set(['API', 'APIS', 'REST', 'CI', 'CD', 'AWS', 'J2EE', 'MQ', 'SQL', 'NOSQL', 'LLM', 'LLMS', 'GENAI']);
   return text
@@ -240,24 +359,38 @@ function extractKnownSkillsFromLine(line: string): string[] {
   );
 }
 
-function extractSkillSignalsFromJdText(jdText: string): { must: string[]; nice: string[]; all: string[] } {
+function extractSkillSignalsFromJdText(jdText: string): {
+  must: string[];
+  nice: string[];
+  tech: string[];
+  all: string[];
+  sectionBySkill: Record<string, SkillEvidenceSection>;
+} {
   const lines = String(jdText || '')
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
-  if (lines.length === 0) return { must: [], nice: [], all: [] };
+  if (lines.length === 0) return { must: [], nice: [], tech: [], all: [], sectionBySkill: {} };
 
   const mustSet = new Set<string>();
   const niceSet = new Set<string>();
+  const techSet = new Set<string>();
   const allSet = new Set<string>();
+  const sectionBySkill: Record<string, SkillEvidenceSection> = {};
 
-  let section: 'neutral' | 'must' | 'nice' = 'neutral';
+  let section: SkillEvidenceSection = 'neutral';
   const mustPattern =
     /\b(must[-\s]*have|required|minimum qualifications|required qualifications|requirements|what you'll need|must[-\s]*required)\b/i;
   const nicePattern =
     /\b(nice[-\s]*to[-\s]*have|preferred|preferred qualifications|good[-\s]*to[-\s]*have|plus|bonus)\b/i;
   const sectionHeaderOnlyPattern =
-    /^\s*(must[-\s]*have skills?|nice[-\s]*to[-\s]*have skills?|required qualifications?|preferred qualifications?|what you'll need to succeed)\s*:?\s*$/i;
+    /^\s*(must[-\s]*have skills?|nice[-\s]*to[-\s]*have skills?|required qualifications?|preferred qualifications?|what you'll need to succeed|tech stack|tools?|environment)\s*:?\s*$/i;
+  const sectionPriority: Record<SkillEvidenceSection, number> = {
+    neutral: 0,
+    nice: 1,
+    must: 2,
+    tech: 3,
+  };
 
   for (const line of lines) {
     const lowerLine = line.toLowerCase();
@@ -266,6 +399,8 @@ function extractSkillSignalsFromJdText(jdText: string): { must: string[]; nice: 
       section = 'must';
     } else if (nicePattern.test(lowerLine)) {
       section = 'nice';
+    } else if (STACK_SECTION_PATTERN.test(lowerLine)) {
+      section = 'tech';
     }
 
     if (sectionHeaderOnlyPattern.test(lowerLine)) {
@@ -274,14 +409,29 @@ function extractSkillSignalsFromJdText(jdText: string): { must: string[]; nice: 
     const candidates = extractKnownSkillsFromLine(lowerLine);
     for (const skill of candidates) {
       allSet.add(skill);
+      const previous = sectionBySkill[skill] || 'neutral';
+      let current: SkillEvidenceSection = 'neutral';
       if (nicePattern.test(lowerLine)) {
         niceSet.add(skill);
+        current = 'nice';
       } else if (mustPattern.test(lowerLine)) {
         mustSet.add(skill);
+        current = 'must';
+      } else if (STACK_SECTION_PATTERN.test(lowerLine)) {
+        techSet.add(skill);
+        current = 'tech';
       } else if (section === 'must') {
         mustSet.add(skill);
+        current = 'must';
       } else if (section === 'nice') {
         niceSet.add(skill);
+        current = 'nice';
+      } else if (section === 'tech') {
+        techSet.add(skill);
+        current = 'tech';
+      }
+      if (sectionPriority[current] >= sectionPriority[previous]) {
+        sectionBySkill[skill] = current;
       }
     }
   }
@@ -295,7 +445,9 @@ function extractSkillSignalsFromJdText(jdText: string): { must: string[]; nice: 
   return {
     must: normalizeSkills(Array.from(mustSet), { jdText: '', strict: true }),
     nice: normalizeSkills(Array.from(niceSet), { jdText: '', strict: true }),
+    tech: normalizeSkills(Array.from(techSet), { jdText: '', strict: true }),
     all: normalizeSkills(Array.from(allSet), { jdText: '', strict: true }),
+    sectionBySkill,
   };
 }
 
@@ -349,11 +501,41 @@ function normalizeSkillCalibration(
   return out.slice(0, 20);
 }
 
-function isTechStackSkill(skill: string): boolean {
-  const s = normalizeItem(skill);
+function isTechStackSkill(candidate: TechStackCandidate): boolean {
+  const s = normalizeItem(candidate.displayText);
   if (!s) return false;
   if (NON_TECH_STACK_SKILLS.has(s)) return false;
-  return true;
+
+  const evidenceSection = candidate.evidenceSection || candidate.sourceSection || 'neutral';
+  const effectiveSkillType = normalizeSkillType(candidate.skillType);
+
+  if (effectiveSkillType) {
+    if (TECH_STACK_TYPES.has(effectiveSkillType)) return true;
+    if (effectiveSkillType === 'language') {
+      return isRuntimeLanguageSkill(candidate.canonicalName || s) || evidenceSection === 'tech';
+    }
+    return false;
+  }
+
+  if (isConceptLikeSkill(s)) return false;
+  return looksLikeToolOrPlatform(s);
+}
+
+function buildTechStackMeta(
+  techStack: string[],
+  mustHaves: string[],
+  niceToHaves: string[],
+): TechStackMetaItem[] {
+  const mustSet = new Set(mustHaves.map((skill) => dedupeKeyForSkill(null, skill)));
+  const niceSet = new Set(niceToHaves.map((skill) => dedupeKeyForSkill(null, skill)));
+  return techStack.map((skill) => {
+    const key = dedupeKeyForSkill(null, skill);
+    return {
+      skill,
+      alsoInMustHave: mustSet.has(key),
+      alsoInNiceToHave: niceSet.has(key),
+    };
+  });
 }
 
 function normalizeFocusAreas(values: string[]): PositionConfigCore['focus_areas'] {
@@ -365,7 +547,7 @@ function normalizeFocusAreas(values: string[]): PositionConfigCore['focus_areas'
 
 export function normalizeAndMap(
   extraction: PositionExtraction,
-  opts: { jdText: string; roleTitleOverride?: string } = { jdText: '' },
+  opts: { jdText: string; roleTitleOverride?: string; skillTypeByName?: Record<string, string> } = { jdText: '' },
 ): {
   prefill: PositionConfigCore;
   missingFields: string[];
@@ -405,23 +587,58 @@ export function normalizeAndMap(
     roleTitle: opts.roleTitleOverride || extraction.role_title,
     strict: true,
   });
-  const mustHaves = capStrings(hasExplicitJdSections ? jdMustSignals : jdSignalSkills, 8);
+  const mustHaves = capStrings(dedupeBySkillKey(hasExplicitJdSections ? jdMustSignals : jdSignalSkills), 8);
   if (mustHaves.length < 1) {
     missing.add('must_haves');
     warnings.push('Must-haves could not be extracted from JD.');
   }
 
-  const mustSet = new Set(mustHaves.map((x) => x.toLowerCase()));
-  const niceToHavesSeed = dedupeStrings(hasExplicitJdSections ? jdNiceSignals : jdSignalSkills.filter((skill) => !mustSet.has(skill.toLowerCase())));
-  const niceToHaves = capStrings(niceToHavesSeed, 8);
-  const techStack = capStrings(
-    dedupeStrings([
-      ...normalizeSkills(extraction.tech_stack || [], { jdText: opts.jdText, strict: true }).filter(isTechStackSkill),
-      ...jdSignalSkills.filter((skill) => !mustSet.has(skill.toLowerCase()) && isTechStackSkill(skill)),
-      ...mustHaves.filter(isTechStackSkill),
-    ]),
-    15,
-  );
+  const mustSet = new Set(mustHaves.map((x) => normalizeLookupKey(x)));
+  const niceToHavesSeed = hasExplicitJdSections ? jdNiceSignals : jdSignalSkills.filter((skill) => !mustSet.has(normalizeLookupKey(skill)));
+  const niceToHaves = capStrings(dedupeBySkillKey(niceToHavesSeed), 8);
+  const techCandidates: TechStackCandidate[] = [
+    ...normalizeSkills(extraction.tech_stack || [], { jdText: opts.jdText, strict: true }).map((skill) => ({
+      displayText: skill,
+      canonicalName: skill,
+      skillType: resolveSkillTypeFromMap(opts.skillTypeByName, skill, skill),
+      evidenceSection: 'tech' as const,
+      sourceSection: 'tech' as const,
+    })),
+    ...jdSignalSkills
+      .filter((skill) => !mustSet.has(normalizeLookupKey(skill)))
+      .map((skill) => ({
+        displayText: skill,
+        canonicalName: skill,
+        skillType: resolveSkillTypeFromMap(opts.skillTypeByName, skill, skill),
+        evidenceSection: jdSignals.sectionBySkill[skill] || 'neutral',
+      })),
+    ...mustHaves.map((skill) => ({
+      displayText: skill,
+      canonicalName: skill,
+      skillType: resolveSkillTypeFromMap(opts.skillTypeByName, skill, skill),
+      evidenceSection: jdSignals.sectionBySkill[skill] || 'must',
+      sourceSection: 'must' as const,
+    })),
+    ...normalizeSkills(jdSignals.tech, { jdText: opts.jdText, strict: true }).map((skill) => ({
+      displayText: skill,
+      canonicalName: skill,
+      skillType: resolveSkillTypeFromMap(opts.skillTypeByName, skill, skill),
+      evidenceSection: 'tech' as const,
+    })),
+  ];
+  const techStackSeen = new Set<string>();
+  const techStack: string[] = [];
+  for (const candidate of techCandidates) {
+    if (!isTechStackSkill(candidate)) continue;
+    const displayText = normalizeItem(candidate.canonicalName || candidate.displayText);
+    if (!displayText) continue;
+    const key = dedupeKeyForSkill(candidate.skillId, displayText);
+    if (techStackSeen.has(key)) continue;
+    techStackSeen.add(key);
+    techStack.push(displayText);
+    if (techStack.length >= 15) break;
+  }
+  const techStackMeta = buildTechStackMeta(techStack, mustHaves, niceToHaves);
   const deepDiveMode = isOneOf(extraction.deep_dive_mode, DEEP_DIVE_MODES) ? extraction.deep_dive_mode : 'none';
   const strictness = isOneOf(extraction.strictness, STRICTNESS_LEVELS) ? extraction.strictness : 'balanced';
   const evaluationPolicy = isOneOf(extraction.evaluation_policy, EVALUATION_POLICIES)
@@ -443,6 +660,7 @@ export function normalizeAndMap(
       must_haves: mustHaves,
       nice_to_haves: niceToHaves,
       tech_stack: techStack,
+      tech_stack_meta: techStackMeta,
       focus_areas: normalizeFocusAreas(extraction.focus_areas || []),
       deep_dive_mode: deepDiveMode,
       strictness,
@@ -456,20 +674,40 @@ export function normalizeAndMap(
   };
 }
 
-export function applyDeterministicMapping(config: PositionConfigCore): PositionConfigCore {
+export function applyDeterministicMapping(
+  config: PositionConfigCore,
+  opts: { skillTypeByName?: Record<string, string> } = {},
+): PositionConfigCore {
   const duration = isOneOf(config.duration_minutes, DURATIONS) ? config.duration_minutes : DEFAULT_DURATION;
 
-  const mustHaves = capStrings(dedupeStrings(normalizeSkills(config.must_haves)), 8);
-  const niceToHaves = capStrings(normalizeSkills(config.nice_to_haves), 8);
+  const mustHaves = capStrings(dedupeBySkillKey(normalizeSkills(config.must_haves)), 8);
+  const niceToHaves = capStrings(dedupeBySkillKey(normalizeSkills(config.nice_to_haves)), 8);
   const effectiveMustHaves = mustHaves;
   const effectiveNiceToHaves = niceToHaves;
+  const normalizedTechCandidates = normalizeSkills(config.tech_stack).map((skill) => ({
+    displayText: skill,
+    canonicalName: skill,
+    skillType: resolveSkillTypeFromMap(opts.skillTypeByName, skill, skill),
+    evidenceSection: 'tech' as const,
+    sourceSection: 'tech' as const,
+  }));
+  const normalizedTechStack = capStrings(
+    dedupeBySkillKey(
+      normalizedTechCandidates
+        .filter((candidate) => isTechStackSkill(candidate))
+        .map((candidate) => normalizeItem(candidate.canonicalName || candidate.displayText))
+        .filter(Boolean),
+    ),
+    15,
+  );
 
   return {
     ...config,
     duration_minutes: duration,
     must_haves: effectiveMustHaves,
     nice_to_haves: effectiveNiceToHaves,
-    tech_stack: capStrings(normalizeSkills(config.tech_stack), 15),
+    tech_stack: normalizedTechStack,
+    tech_stack_meta: buildTechStackMeta(normalizedTechStack, effectiveMustHaves, effectiveNiceToHaves),
     focus_areas: capStrings(config.focus_areas.filter((f): f is PositionConfigCore['focus_areas'][number] => isOneOf(f, FOCUS_AREAS)), 4),
     notes_for_interviewer: String(config.notes_for_interviewer || '').slice(0, 600),
     skills_calibration: normalizeSkillCalibration(

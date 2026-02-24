@@ -27,6 +27,12 @@ export type SkillCalibrationItem = {
   weight_percent: number;
 };
 
+export type TechStackMetaItem = {
+  skill: string;
+  alsoInMustHave: boolean;
+  alsoInNiceToHave: boolean;
+};
+
 export type CanonicalSkillRef = {
   raw_text: string;
   skill_id: number | null;
@@ -72,6 +78,7 @@ export type PositionConfigCore = {
   must_haves: string[];
   nice_to_haves: string[];
   tech_stack: string[];
+  tech_stack_meta?: TechStackMetaItem[];
   focus_areas: FocusArea[];
   deep_dive_mode: DeepDiveMode;
   strictness: Strictness;

@@ -918,12 +918,6 @@ export default function Page() {
                 <button type="button" className="lk-button" onClick={() => router.push('/positions/new')}>
                   New Position Setup
                 </button>
-                <button type="button" className="lk-button" onClick={() => router.push('/positions/new')}>
-                  Edit Positions
-                </button>
-                <button type="button" className="lk-button" onClick={() => router.push('/canonicalizations')}>
-                  Canonicalizations
-                </button>
                 <button
                   type="button"
                   className="lk-button"
@@ -978,6 +972,15 @@ export default function Page() {
                             }`}
                           </p>
                           <div className={styles.cardButtons}>
+                            <button
+                              type="button"
+                              className="lk-button"
+                              onClick={() =>
+                                router.push(`/positions/new?positionId=${encodeURIComponent(selectedPosition.position_id)}`)
+                              }
+                            >
+                              Edit Position
+                            </button>
                             <button type="button" className="lk-button" onClick={openSkillsCalibration}>
                               Manage Skills Calibration
                             </button>
@@ -1628,6 +1631,11 @@ export default function Page() {
 
           {!loading && activeTab === 'settings' ? (
             <div className={styles.tabContent}>
+              <div className={styles.cardButtons}>
+                <button type="button" className="lk-button" onClick={() => router.push('/canonicalizations')}>
+                  Canonicalizations
+                </button>
+              </div>
               <h3 style={{ margin: 0 }}>Agent Prompt Settings</h3>
               <p className={styles.interviewMeta}>
                 Edit the base runtime context for each agent. Candidate CV and role context are still appended automatically at runtime.

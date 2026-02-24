@@ -1,6 +1,7 @@
 import { applyDeterministicMapping, deepDiff } from '@/lib/position/logic';
 import type { PositionConfigCore } from '@/lib/position/types';
 import { canonicalizeSkillList } from '@/lib/server/skillCanonicalization';
+import { buildSkillTypeByName } from '@/lib/server/skillTypeMap';
 import { createPosition, listPositions } from '@/lib/server/positionStore';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -26,8 +27,9 @@ export async function POST(req: NextRequest) {
       createdBy?: string;
     };
 
-    const finalMapped = applyDeterministicMapping(body.finalConfig);
-    const prefillMapped = applyDeterministicMapping(body.normalizedPrefill);
+    const skillTypeByName = await buildSkillTypeByName();
+    const finalMapped = applyDeterministicMapping(body.finalConfig, { skillTypeByName });
+    const prefillMapped = applyDeterministicMapping(body.normalizedPrefill, { skillTypeByName });
     const diff = deepDiff(prefillMapped, finalMapped) ?? {};
 
     const [mustCanonical, niceCanonical, techCanonical] = await Promise.all([

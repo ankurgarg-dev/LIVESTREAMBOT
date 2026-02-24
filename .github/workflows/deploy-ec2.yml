@@ -1,6 +1,10 @@
 name: Deploy To EC2
 
 on:
+  workflow_run:
+    workflows: ["Test"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -17,6 +21,7 @@ env:
 
 jobs:
   deploy:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
 
     steps:
