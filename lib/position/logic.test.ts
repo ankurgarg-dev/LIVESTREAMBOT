@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyDeterministicMapping,
   deepDiff,
+  extractSkillCandidatesFromLine,
   normalizeAndMap,
   normalizeSkills,
   validateExtractionShape,
@@ -75,6 +76,22 @@ describe('normalizeSkills', () => {
   });
 });
 
+describe('extractSkillCandidatesFromLine', () => {
+  it('explodes e.g. parenthesis lists into individual skill candidates', () => {
+    const out = extractSkillCandidatesFromLine(
+      'Automation tools (e.g., Selenium, Playwright, Appium, XCTest, JUnit)',
+    );
+    expect(out).toEqual(expect.arrayContaining(['Selenium', 'Playwright', 'Appium', 'XCTest', 'JUnit']));
+  });
+
+  it('handles tools colon and slash-separated tokens', () => {
+    const out = extractSkillCandidatesFromLine('Tools: Selenium, Playwright, CI/CD, JUnit/TestNG');
+    expect(out).toEqual(
+      expect.arrayContaining(['Selenium', 'Playwright', 'CI/CD', 'CI', 'CD', 'JUnit/TestNG', 'JUnit', 'TestNG']),
+    );
+  });
+});
+
 describe('normalizeAndMap', () => {
   it('uses extracted duration when valid', () => {
     const res = normalizeAndMap(sampleExtraction(), { jdText: 'backend services' });
@@ -110,6 +127,25 @@ Preferred Qualifications
 
     expect(res.prefill.must_haves).toEqual(expect.arrayContaining(['Java', 'Spring Boot', 'Microservices', 'AWS', 'Kafka']));
     expect(res.prefill.nice_to_haves).toEqual(expect.arrayContaining(['Kubernetes', 'Terraform']));
+  });
+
+  it('prioritizes exploded requirements-line tool skills for must-haves', () => {
+    const jdText = `
+Requirements
+- Automation tools (e.g., Selenium, Playwright, Appium, XCTest, JUnit)
+`;
+    const res = normalizeAndMap(
+      sampleExtraction({
+        must_haves: ['Java', 'Python', 'AWS', 'System Design', 'Communication'],
+        nice_to_haves: [],
+        tech_stack: [],
+      }),
+      { jdText },
+    );
+
+    expect(res.prefill.must_haves).toEqual(
+      expect.arrayContaining(['Selenium', 'Playwright', 'Appium', 'XCTest', 'JUnit']),
+    );
   });
 
   it('keeps GenAI in nice-to-have when JD marks it as nice to have', () => {

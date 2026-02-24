@@ -270,6 +270,10 @@ function normalizeCaseToken(text: string): string {
     JAVASCRIPT: 'JavaScript',
     TYPESCRIPT: 'TypeScript',
     FASTAPI: 'FastAPI',
+    JUNIT: 'JUnit',
+    TESTNG: 'TestNG',
+    XCTEST: 'XCTest',
+    GITHUB: 'GitHub',
   };
   const upperAcronyms = new Set(['API', 'APIS', 'REST', 'CI', 'CD', 'AWS', 'J2EE', 'MQ', 'SQL', 'NOSQL', 'LLM', 'LLMS', 'GENAI']);
   return text
@@ -379,6 +383,136 @@ function extractKnownSkillsFromLine(line: string): string[] {
   );
 }
 
+function cleanupCandidateToken(raw: string): string {
+  return String(raw || '')
+    .replace(/^[\s\-*•·▪◦:()"'`[\]{}]+/g, '')
+    .replace(/[;:,.!?]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function explodeSlashToken(token: string): string[] {
+  const normalized = cleanupCandidateToken(token);
+  if (!normalized) return [];
+  if (!/^[A-Za-z0-9+#.-]+(?:\/[A-Za-z0-9+#.-]+)+$/.test(normalized)) return [normalized];
+  const parts = normalized
+    .split('/')
+    .map((part) => cleanupCandidateToken(part))
+    .filter(Boolean);
+  return dedupeStrings([normalized, ...parts]);
+}
+
+function splitCandidateSegment(segment: string): string[] {
+  const chunks = String(segment || '')
+    .split(/[;,•·▪◦|]+/g)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  const out: string[] = [];
+  for (const chunk of chunks) {
+    const trimmed = chunk
+      .replace(/\b(e\.g\.?|eg\.?|such as|including|like)\b[:\s-]*/gi, '')
+      .replace(/^(and|or)\s+/i, '')
+      .trim();
+    if (!trimmed) continue;
+    out.push(...explodeSlashToken(trimmed));
+  }
+  return out;
+}
+
+export function extractSkillCandidatesFromLine(line: string): string[] {
+  const raw = String(line || '').trim();
+  if (!raw) return [];
+
+  const segments: string[] = [];
+  const seenSegments = new Set<string>();
+
+  const pushSegment = (value: string) => {
+    const normalized = String(value || '').trim();
+    if (!normalized) return;
+    const key = normalizeLookupKey(normalized);
+    if (seenSegments.has(key)) return;
+    seenSegments.add(key);
+    segments.push(normalized);
+  };
+
+  const parentheticalPattern = /\(([^)]+)\)/g;
+  for (const match of raw.matchAll(parentheticalPattern)) {
+    const inner = String(match[1] || '').trim();
+    if (!inner) continue;
+    if (/(e\.g\.?|eg\.?|such as|including|like|tools?\s*:)/i.test(inner) || /[,;/]/.test(inner)) {
+      pushSegment(inner);
+    }
+  }
+
+  const triggerPattern = /\b(such as|including|like|e\.g\.?|eg\.?)\b[:\s-]*([^.;\n]+)/gi;
+  for (const match of raw.matchAll(triggerPattern)) {
+    pushSegment(String(match[2] || '').trim());
+  }
+
+  const colonListPattern = /\b(tools?|frameworks?|technologies|platforms?|libraries|skills?|stack)\b\s*:\s*([^.;\n]+)/gi;
+  for (const match of raw.matchAll(colonListPattern)) {
+    pushSegment(String(match[2] || '').trim());
+  }
+
+  if (segments.length === 0 && /[,;]|\/|•|·|▪|◦/.test(raw)) {
+    pushSegment(raw);
+  }
+  if (segments.length === 0) {
+    pushSegment(raw);
+  }
+
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const segment of segments) {
+    const pieces = splitCandidateSegment(segment);
+    for (const piece of pieces) {
+      const cleaned = cleanupCandidateToken(piece);
+      if (!cleaned) continue;
+      const lower = cleaned.toLowerCase();
+      if (lower === 'e.g' || lower === 'eg' || lower === 'and' || lower === 'or') continue;
+      if (
+        /^(requirements?|required qualifications?|preferred qualifications?|qualifications?|must[-\s]*haves?|nice[-\s]*to[-\s]*haves?|tools?|technologies?|skills?)$/i.test(
+          cleaned,
+        )
+      ) {
+        continue;
+      }
+      const key = cleaned.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(cleaned);
+    }
+  }
+  return out;
+}
+
+function collectRequirementPriorityLineIndexes(lines: string[]): Set<number> {
+  const priority = new Set<number>();
+  let inRequirementsSection = false;
+  const requirementsStartPattern =
+    /^\s*(requirements?|required qualifications?|minimum qualifications?|qualifications?|what you'll need|must[-\s]*have skills?)\b[:\s-]*$/i;
+  const otherSectionStartPattern =
+    /^\s*(preferred qualifications?|nice[-\s]*to[-\s]*have(?:\s*skills?)?|responsibilities?|about( the role)?|job summary|benefits?|tech stack|tools?|environment)\b[:\s-]*$/i;
+
+  lines.forEach((line, idx) => {
+    const current = line.trim();
+    if (!current) return;
+    if (requirementsStartPattern.test(current)) {
+      inRequirementsSection = true;
+      return;
+    }
+    if (otherSectionStartPattern.test(current)) {
+      inRequirementsSection = false;
+      return;
+    }
+    if (inRequirementsSection) {
+      priority.add(idx);
+    }
+  });
+  return priority;
+}
+
 function extractSkillSignalsFromJdText(jdText: string): {
   must: string[];
   nice: string[];
@@ -391,6 +525,7 @@ function extractSkillSignalsFromJdText(jdText: string): {
     .map((line) => line.trim())
     .filter(Boolean);
   if (lines.length === 0) return { must: [], nice: [], tech: [], all: [], sectionBySkill: {} };
+  const requirementPriorityLineIndexes = collectRequirementPriorityLineIndexes(lines);
 
   const mustSet = new Set<string>();
   const niceSet = new Set<string>();
@@ -408,25 +543,29 @@ function extractSkillSignalsFromJdText(jdText: string): {
   const sectionPriority: Record<SkillEvidenceSection, number> = {
     neutral: 0,
     nice: 1,
-    must: 2,
-    tech: 3,
+    tech: 2,
+    must: 3,
   };
 
-  for (const line of lines) {
+  for (const [idx, line] of lines.entries()) {
     const lowerLine = line.toLowerCase();
+    const isRequirementPriorityLine = requirementPriorityLineIndexes.has(idx);
 
     if (mustPattern.test(lowerLine) && !nicePattern.test(lowerLine)) {
       section = 'must';
     } else if (nicePattern.test(lowerLine)) {
       section = 'nice';
-    } else if (STACK_SECTION_PATTERN.test(lowerLine)) {
+    } else if (STACK_SECTION_PATTERN.test(lowerLine) && !isRequirementPriorityLine) {
       section = 'tech';
     }
 
     if (sectionHeaderOnlyPattern.test(lowerLine)) {
       continue;
     }
-    const candidates = extractKnownSkillsFromLine(lowerLine);
+    const explodedCandidates = extractSkillCandidatesFromLine(line);
+    const normalizedExploded = normalizeSkills(explodedCandidates, { jdText: '', strict: true });
+    const knownFromLine = extractKnownSkillsFromLine(lowerLine);
+    const candidates = dedupeStrings([...knownFromLine, ...normalizedExploded]);
     for (const skill of candidates) {
       allSet.add(skill);
       const previous = sectionBySkill[skill] || 'neutral';
@@ -435,6 +574,9 @@ function extractSkillSignalsFromJdText(jdText: string): {
         niceSet.add(skill);
         current = 'nice';
       } else if (mustPattern.test(lowerLine)) {
+        mustSet.add(skill);
+        current = 'must';
+      } else if (isRequirementPriorityLine) {
         mustSet.add(skill);
         current = 'must';
       } else if (STACK_SECTION_PATTERN.test(lowerLine)) {
@@ -618,7 +760,9 @@ export function normalizeAndMap(
     strict: true,
   });
   const mustSeed = hasExplicitJdSections
-    ? [...jdMustSignals, ...extractedMust, ...jdSignalSkills]
+    ? jdMustSignals.length >= 3
+      ? [...jdMustSignals, ...jdSignalSkills, ...extractedMust]
+      : [...jdMustSignals, ...extractedMust, ...jdSignalSkills]
     : [...extractedMust, ...jdSignalSkills];
   const preliminaryMust = capStrings(dedupeBySkillKey(mustSeed), 8);
   const hardMust = preliminaryMust.filter((skill) => !isSoftOrGenericSkill(skill));
