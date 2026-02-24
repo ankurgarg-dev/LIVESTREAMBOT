@@ -52,6 +52,10 @@ const TARGET_SAMPLE_RATE = 48000;
 const TARGET_CHANNELS = 1;
 const FRAME_DURATION_MS = 10;
 const FRAME_SAMPLES = (TARGET_SAMPLE_RATE * FRAME_DURATION_MS) / 1000;
+const AUDIO_PUMP_MAX_QUEUE_SECONDS = getNumberEnv('AUDIO_PUMP_MAX_QUEUE_SECONDS', 0.8, {
+  min: 0.1,
+  max: 5,
+});
 const TEXT_DECODER = new TextDecoder();
 const STT_SAMPLE_RATE = 16000;
 const STT_CHANNELS = 1;
@@ -72,11 +76,11 @@ const INTERVIEW_MODE = process.env.AGENT_INTERVIEW_MODE !== 'false';
 const AGENT_TYPE_CLASSIC = 'classic';
 const AGENT_TYPE_REALTIME_SCREENING = 'realtime_screening';
 const DEFAULT_SCREENING_MAX_MINUTES = 10;
-const DEFAULT_STT_VAD_RMS_THRESHOLD = 0.005;
+const DEFAULT_STT_VAD_RMS_THRESHOLD = 0.0035;
 const DEFAULT_STT_MIN_SPEECH_MS = 350;
-const DEFAULT_STT_MAX_SILENCE_MS = 2200;
+const DEFAULT_STT_MAX_SILENCE_MS = 900;
 const DEFAULT_STT_MAX_UTTERANCE_MS = 30000;
-const DEFAULT_STT_MIN_TRANSCRIBE_MS = 1000;
+const DEFAULT_STT_MIN_TRANSCRIBE_MS = 400;
 const DEFAULT_STT_GRACE_MS = 350;
 
 const SCREENING_MAX_MINUTES = getNumberEnv(
@@ -618,6 +622,11 @@ async function createAgentSession(
     minTranscribeMs: persistedPromptTemplates.sttMinTranscribeMs,
     graceMs: persistedPromptTemplates.sttGraceMs,
   };
+  if (selectedAgentType === AGENT_TYPE_REALTIME_SCREENING) {
+    sttTurnConfig.rmsThreshold = Math.min(sttTurnConfig.rmsThreshold, 0.004);
+    sttTurnConfig.maxSilenceMs = Math.min(sttTurnConfig.maxSilenceMs, 900);
+    sttTurnConfig.minTranscribeMs = Math.min(sttTurnConfig.minTranscribeMs, 400);
+  }
   const agent = createLivekitAgent({
     roomName,
     agentType: selectedAgentType,
@@ -1342,7 +1351,9 @@ async function createAgentSession(
   await room.localParticipant.publishTrack(localTrack, publishOptions);
   console.log(`[agent] published audio track in '${roomName}'`);
 
-  audioPump = new PcmAudioPump(audioSource);
+  audioPump = new PcmAudioPump(audioSource, {
+    maxQueueSeconds: AUDIO_PUMP_MAX_QUEUE_SECONDS,
+  });
 
   if (process.env.SIMULATED_INPUT && process.env.SIMULATED_INPUT.trim()) {
     queueUserTurn(process.env.SIMULATED_INPUT, 'simulated');

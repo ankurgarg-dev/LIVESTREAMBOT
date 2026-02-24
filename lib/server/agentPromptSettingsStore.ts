@@ -35,11 +35,11 @@ export const DEFAULT_REALTIME_SCREENING_AGENT_PROMPT = [
 ].join(' ');
 
 export const DEFAULT_SCREENING_MAX_MINUTES = 10;
-export const DEFAULT_STT_VAD_RMS_THRESHOLD = 0.005;
+export const DEFAULT_STT_VAD_RMS_THRESHOLD = 0.0035;
 export const DEFAULT_STT_MIN_SPEECH_MS = 350;
-export const DEFAULT_STT_MAX_SILENCE_MS = 2200;
+export const DEFAULT_STT_MAX_SILENCE_MS = 900;
 export const DEFAULT_STT_MAX_UTTERANCE_MS = 30000;
-export const DEFAULT_STT_MIN_TRANSCRIBE_MS = 1000;
+export const DEFAULT_STT_MIN_TRANSCRIBE_MS = 400;
 export const DEFAULT_STT_GRACE_MS = 350;
 
 export type AgentPromptSettings = {
