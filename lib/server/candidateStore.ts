@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { mkdir, stat, unlink, writeFile } from 'fs/promises';
 import os from 'os';
 import path from 'path';
+import type { CanonicalSkillRef } from '@/lib/position/types';
 import { getPrismaClient } from '@/lib/server/prismaClient';
 import type { CvJdDetailedScorecard, CvJdScorecard } from '@/lib/server/cvJdScoring';
 
@@ -29,6 +30,11 @@ export type CandidateApplicationRecord = {
   cv?: CandidateAssetMeta;
   cvJdScorecard?: CvJdScorecard;
   detailedScorecard?: CvJdDetailedScorecard;
+  canonical_skills?: {
+    must_haves: CanonicalSkillRef[];
+    nice_to_haves: CanonicalSkillRef[];
+    tech_stack: CanonicalSkillRef[];
+  };
   recommendation: 'strong_fit' | 'fit' | 'borderline' | 'reject';
   conclusion: string;
   createdAt: string;
@@ -67,6 +73,14 @@ function asCandidateRecord(value: unknown): CandidateApplicationRecord | null {
       : undefined,
     cvJdScorecard: typed.cvJdScorecard,
     detailedScorecard: typed.detailedScorecard,
+    canonical_skills:
+      typed.canonical_skills && typeof typed.canonical_skills === 'object'
+        ? {
+            must_haves: Array.isArray(typed.canonical_skills.must_haves) ? typed.canonical_skills.must_haves : [],
+            nice_to_haves: Array.isArray(typed.canonical_skills.nice_to_haves) ? typed.canonical_skills.nice_to_haves : [],
+            tech_stack: Array.isArray(typed.canonical_skills.tech_stack) ? typed.canonical_skills.tech_stack : [],
+          }
+        : undefined,
     recommendation: typed.recommendation === 'strong_fit' || typed.recommendation === 'fit' || typed.recommendation === 'borderline'
       ? typed.recommendation
       : 'reject',
@@ -102,6 +116,11 @@ export async function createCandidateApplication(input: {
   roleContext: string;
   cvJdScorecard?: CvJdScorecard;
   detailedScorecard?: CvJdDetailedScorecard;
+  canonicalSkills?: {
+    must_haves: CanonicalSkillRef[];
+    nice_to_haves: CanonicalSkillRef[];
+    tech_stack: CanonicalSkillRef[];
+  };
   recommendation: 'strong_fit' | 'fit' | 'borderline' | 'reject';
   conclusion: string;
 }): Promise<CandidateApplicationRecord> {
@@ -116,6 +135,7 @@ export async function createCandidateApplication(input: {
     roleContext: input.roleContext,
     cvJdScorecard: input.cvJdScorecard,
     detailedScorecard: input.detailedScorecard,
+    canonical_skills: input.canonicalSkills,
     recommendation: input.recommendation,
     conclusion: input.conclusion,
     createdAt: now,

@@ -8,6 +8,7 @@ import {
 } from '@/lib/server/interviewStore';
 import { buildRoleContextFromPosition, extractCandidateContextFromUpload } from '@/lib/server/cvContext';
 import { computeCvJdScorecard } from '@/lib/server/cvJdScoring';
+import { canonicalizeSkillList } from '@/lib/server/skillCanonicalization';
 import { RoomServiceClient } from 'livekit-server-sdk';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -114,7 +115,17 @@ export async function POST(req: NextRequest) {
 
     const requestedRoomName = String(form.get('roomName') ?? '').trim();
     const defaultRoomName = process.env.LIVEKIT_ROOM || 'agent-test-room';
-    const positionSnapshot = parsePositionSnapshot(form.get('positionSnapshot'));
+    const positionSnapshotRaw = parsePositionSnapshot(form.get('positionSnapshot'));
+    const positionSnapshot = positionSnapshotRaw
+      ? {
+          ...positionSnapshotRaw,
+          must_haves: (await canonicalizeSkillList(positionSnapshotRaw.must_haves, null)).map((x) => x.canonical_name || x.raw_text),
+          nice_to_haves: (await canonicalizeSkillList(positionSnapshotRaw.nice_to_haves, null)).map(
+            (x) => x.canonical_name || x.raw_text,
+          ),
+          tech_stack: (await canonicalizeSkillList(positionSnapshotRaw.tech_stack, null)).map((x) => x.canonical_name || x.raw_text),
+        }
+      : undefined;
     const positionId = String(form.get('positionId') ?? '').trim() || undefined;
     const agentType = normalizeAgentType(form.get('agentType'));
     const fallbackJobTitle = positionSnapshot?.role_title || '';

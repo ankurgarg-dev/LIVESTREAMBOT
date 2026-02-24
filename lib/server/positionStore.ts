@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import type { PositionConfigCore, PositionConfigRecord } from '@/lib/position/types';
+import type { CanonicalSkillGroups, CanonicalSkillRef, PositionConfigCore, PositionConfigRecord } from '@/lib/position/types';
 import { getPrismaClient } from '@/lib/server/prismaClient';
 
 function sanitizePositionCore(value: unknown): PositionConfigCore {
@@ -24,6 +24,38 @@ function sanitizePositionCore(value: unknown): PositionConfigCore {
   };
 }
 
+function sanitizeCanonicalSkillRef(value: unknown): CanonicalSkillRef | null {
+  if (!value || typeof value !== 'object') return null;
+  const typed = value as Partial<CanonicalSkillRef>;
+  const rawText = String(typed.raw_text || '').trim();
+  if (!rawText) return null;
+  const skillId = Number(typed.skill_id);
+  return {
+    raw_text: rawText,
+    skill_id: Number.isFinite(skillId) && skillId > 0 ? skillId : null,
+    canonical_name: typed.canonical_name ? String(typed.canonical_name).trim() : null,
+    confidence: Number.isFinite(Number(typed.confidence)) ? Number(typed.confidence) : 0,
+    matched_by: String(typed.matched_by || 'custom'),
+  };
+}
+
+function sanitizeCanonicalSkillList(value: unknown): CanonicalSkillRef[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => sanitizeCanonicalSkillRef(item))
+    .filter((item): item is CanonicalSkillRef => Boolean(item));
+}
+
+function sanitizeCanonicalSkillGroups(value: unknown): CanonicalSkillGroups | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const typed = value as Partial<CanonicalSkillGroups>;
+  return {
+    must_haves: sanitizeCanonicalSkillList(typed.must_haves),
+    nice_to_haves: sanitizeCanonicalSkillList(typed.nice_to_haves),
+    tech_stack: sanitizeCanonicalSkillList(typed.tech_stack),
+  };
+}
+
 function clonePosition(value: unknown): PositionConfigRecord | null {
   if (!value || typeof value !== 'object') return null;
   const typed = value as PositionConfigRecord & {
@@ -35,6 +67,7 @@ function clonePosition(value: unknown): PositionConfigRecord | null {
     ...typed,
     ...finalConfig,
     jd_text: typeof typed.jd_text === 'string' ? typed.jd_text : '',
+    canonical_skills: sanitizeCanonicalSkillGroups(typed.canonical_skills),
     normalized_prefill: normalizedPrefill,
   };
 }
@@ -57,6 +90,7 @@ export async function getPosition(id: string): Promise<PositionConfigRecord | un
 export async function createPosition(input: {
   finalConfig: PositionConfigCore;
   normalizedPrefill: PositionConfigCore;
+  canonicalSkills?: CanonicalSkillGroups;
   jdText?: string;
   rawExtraction: unknown;
   extractionConfidence: number;
@@ -72,6 +106,7 @@ export async function createPosition(input: {
     position_id: randomUUID(),
     ...sanitizedFinal,
     jd_text: String(input.jdText || '').trim(),
+    canonical_skills: sanitizeCanonicalSkillGroups(input.canonicalSkills),
     extracted_from_jd_raw: input.rawExtraction,
     normalized_prefill: sanitizedPrefill,
     extraction_confidence: input.extractionConfidence,
@@ -98,6 +133,7 @@ export async function updatePosition(
   id: string,
   input: {
     finalConfig: PositionConfigCore;
+    canonicalSkills?: CanonicalSkillGroups;
     moderatorOverridesDiff: unknown;
     jdText?: string;
     extractionConfidence?: number;
@@ -113,6 +149,7 @@ export async function updatePosition(
   const next: PositionConfigRecord = {
     ...current,
     ...sanitizedFinal,
+    canonical_skills: sanitizeCanonicalSkillGroups(input.canonicalSkills) ?? current.canonical_skills,
     jd_text: typeof input.jdText === 'string' ? input.jdText.trim() : current.jd_text,
     moderator_overrides_diff: input.moderatorOverridesDiff,
     extraction_confidence:

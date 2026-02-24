@@ -921,6 +921,9 @@ export default function Page() {
                 <button type="button" className="lk-button" onClick={() => router.push('/positions/new')}>
                   Edit Positions
                 </button>
+                <button type="button" className="lk-button" onClick={() => router.push('/canonicalizations')}>
+                  Canonicalizations
+                </button>
                 <button
                   type="button"
                   className="lk-button"

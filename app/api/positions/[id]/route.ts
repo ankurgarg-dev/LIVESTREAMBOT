@@ -1,6 +1,7 @@
 import { applyDeterministicMapping, deepDiff } from '@/lib/position/logic';
 import type { PositionConfigCore } from '@/lib/position/types';
 import { deletePosition, getPosition, updatePosition } from '@/lib/server/positionStore';
+import { canonicalizeSkillList } from '@/lib/server/skillCanonicalization';
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function GET(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -31,8 +32,19 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
     const prefillMapped = applyDeterministicMapping(current.normalized_prefill);
     const diff = deepDiff(prefillMapped, finalMapped) ?? {};
 
+    const [mustCanonical, niceCanonical, techCanonical] = await Promise.all([
+      canonicalizeSkillList(finalMapped.must_haves, null),
+      canonicalizeSkillList(finalMapped.nice_to_haves, null),
+      canonicalizeSkillList(finalMapped.tech_stack, null),
+    ]);
+
     const updated = await updatePosition(id, {
       finalConfig: finalMapped,
+      canonicalSkills: {
+        must_haves: mustCanonical,
+        nice_to_haves: niceCanonical,
+        tech_stack: techCanonical,
+      },
       jdText: typeof body.jdText === 'string' ? body.jdText : current.jd_text,
       moderatorOverridesDiff: diff,
       extractionConfidence: current.extraction_confidence,

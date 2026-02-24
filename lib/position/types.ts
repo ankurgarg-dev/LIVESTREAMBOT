@@ -27,6 +27,20 @@ export type SkillCalibrationItem = {
   weight_percent: number;
 };
 
+export type CanonicalSkillRef = {
+  raw_text: string;
+  skill_id: number | null;
+  canonical_name: string | null;
+  confidence: number;
+  matched_by: string;
+};
+
+export type CanonicalSkillGroups = {
+  must_haves: CanonicalSkillRef[];
+  nice_to_haves: CanonicalSkillRef[];
+  tech_stack: CanonicalSkillRef[];
+};
+
 export type PositionExtraction = {
   role_title: string;
   level: string;
@@ -69,6 +83,7 @@ export type PositionConfigCore = {
 export type PositionConfigRecord = PositionConfigCore & {
   position_id: string;
   jd_text?: string;
+  canonical_skills?: CanonicalSkillGroups;
   extracted_from_jd_raw: unknown;
   normalized_prefill: PositionConfigCore;
   extraction_confidence: number;

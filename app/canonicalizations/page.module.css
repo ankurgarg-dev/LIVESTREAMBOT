@@ -1,0 +1,97 @@
+.page {
+  padding: 24px;
+  display: grid;
+  gap: 18px;
+}
+
+.panel {
+  border: 1px solid #c8d6e5;
+  border-radius: 14px;
+  padding: 16px;
+  background: #f8fbfd;
+}
+
+.help {
+  color: #4d6476;
+  margin-top: 4px;
+}
+
+.skillCard {
+  border: 1px solid #d4e1ec;
+  border-radius: 12px;
+  padding: 12px;
+  margin-top: 12px;
+  background: #ffffff;
+}
+
+.skillHeader {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.grid2 {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  align-items: center;
+}
+
+.input,
+.textarea {
+  width: 100%;
+  border: 1px solid #aac3d6;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fff;
+  color: #203545;
+}
+
+.textarea {
+  min-height: 130px;
+  resize: vertical;
+}
+
+.button,
+.buttonDanger {
+  border: 1px solid #7da9c8;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #e7f2fb;
+  color: #1d4058;
+  cursor: pointer;
+}
+
+.buttonDanger {
+  border-color: #d08e8e;
+  background: #fbeaea;
+  color: #6f2c2c;
+}
+
+.message {
+  color: #1b5f8a;
+  margin-top: 10px;
+}
+
+@media (max-width: 900px) {
+  .skillHeader {
+    grid-template-columns: 1fr;
+  }
+
+  .grid2 {
+    grid-template-columns: 1fr;
+  }
+
+  .row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

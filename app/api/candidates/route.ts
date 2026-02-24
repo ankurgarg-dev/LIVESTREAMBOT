@@ -1,7 +1,8 @@
 import { computeCvJdDetailedScorecard, computeCvJdScorecard } from '@/lib/server/cvJdScoring';
 import { attachCandidateCv, createCandidateApplication, listCandidateApplications } from '@/lib/server/candidateStore';
-import { extractCandidateContextFromUpload, buildRoleContextFromPosition } from '@/lib/server/cvContext';
+import { extractCandidateProfileFromUpload, buildRoleContextFromPosition } from '@/lib/server/cvContext';
 import { getPosition } from '@/lib/server/positionStore';
+import { canonicalizeSkillList } from '@/lib/server/skillCanonicalization';
 import { NextRequest, NextResponse } from 'next/server';
 
 function readRequiredText(form: FormData, key: string): string {
@@ -10,6 +11,11 @@ function readRequiredText(form: FormData, key: string): string {
     throw new Error(`Missing required field: ${key}`);
   }
   return value.trim();
+}
+
+function readOptionalText(form: FormData, key: string): string {
+  const value = form.get(key);
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 function isUploadedFile(value: FormDataEntryValue | null): value is File {
@@ -55,8 +61,8 @@ export async function POST(req: NextRequest) {
   try {
     const form = await req.formData();
     const positionId = readRequiredText(form, 'positionId');
-    const candidateName = readRequiredText(form, 'candidateName');
-    const candidateEmail = readRequiredText(form, 'candidateEmail');
+    const enteredCandidateName = readOptionalText(form, 'candidateName');
+    const enteredCandidateEmail = readOptionalText(form, 'candidateEmail');
     const cvFile = form.get('cv');
     if (!isUploadedFile(cvFile) || cvFile.size <= 0) {
       return NextResponse.json({ ok: false, error: 'CV file is required.' }, { status: 400 });
@@ -67,13 +73,33 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'Position not found.' }, { status: 404 });
     }
 
+    const [mustCanonical, niceCanonical, techCanonical] = await Promise.all([
+      canonicalizeSkillList(position.must_haves, null),
+      canonicalizeSkillList(position.nice_to_haves, null),
+      canonicalizeSkillList(position.tech_stack, null),
+    ]);
+
+    const toCanonicalNames = (items: Array<{ canonical_name: string | null; raw_text: string }>): string[] => {
+      const out: string[] = [];
+      const seen = new Set<string>();
+      for (const item of items) {
+        const value = String(item.canonical_name || item.raw_text || '').trim();
+        if (!value) continue;
+        const key = value.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(value);
+      }
+      return out;
+    };
+
     const positionSnapshot = {
       role_title: position.role_title,
       level: position.level,
       duration_minutes: position.duration_minutes,
-      must_haves: position.must_haves,
-      nice_to_haves: position.nice_to_haves,
-      tech_stack: position.tech_stack,
+      must_haves: toCanonicalNames(mustCanonical),
+      nice_to_haves: toCanonicalNames(niceCanonical),
+      tech_stack: toCanonicalNames(techCanonical),
       focus_areas: position.focus_areas,
       deep_dive_mode: position.deep_dive_mode,
       strictness: position.strictness,
@@ -81,7 +107,14 @@ export async function POST(req: NextRequest) {
       notes_for_interviewer: position.notes_for_interviewer,
     };
 
-    const candidateContext = await extractCandidateContextFromUpload(cvFile).catch(() => '');
+    const profile = await extractCandidateProfileFromUpload(cvFile).catch(() => ({
+      candidateContext: '',
+      candidateName: '',
+      candidateEmail: '',
+    }));
+    const candidateName = enteredCandidateName || profile.candidateName || 'Unknown Candidate';
+    const candidateEmail = enteredCandidateEmail || profile.candidateEmail || '';
+    const candidateContext = profile.candidateContext;
     const roleContext = buildRoleContextFromPosition(positionSnapshot, position.role_title, '');
     const cvJdScorecard = computeCvJdScorecard({ candidateContext, roleContext, positionSnapshot });
     const detailedScorecard = computeCvJdDetailedScorecard({
@@ -102,6 +135,11 @@ export async function POST(req: NextRequest) {
       roleContext,
       cvJdScorecard,
       detailedScorecard,
+      canonicalSkills: {
+        must_haves: mustCanonical,
+        nice_to_haves: niceCanonical,
+        tech_stack: techCanonical,
+      },
       recommendation,
       conclusion,
     });

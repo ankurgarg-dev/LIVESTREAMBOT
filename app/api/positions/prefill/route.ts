@@ -1,4 +1,5 @@
 import { extractAndPrefillPosition } from '@/lib/server/jdExtractor';
+import { canonicalizeSkillList } from '@/lib/server/skillCanonicalization';
 import { NextRequest, NextResponse } from 'next/server';
 import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
@@ -201,7 +202,42 @@ export async function POST(req: NextRequest) {
     const jdText = await readJdText(form);
 
     const result = await extractAndPrefillPosition({ roleTitle, jdText });
-    return NextResponse.json({ ok: true, jdTextUsed: jdText, ...result });
+    const [mustCanonical, niceCanonical, techCanonical] = await Promise.all([
+      canonicalizeSkillList(result.normalizedPrefill.must_haves, null),
+      canonicalizeSkillList(result.normalizedPrefill.nice_to_haves, null),
+      canonicalizeSkillList(result.normalizedPrefill.tech_stack, null),
+    ]);
+
+    const canonicalNames = (items: Array<{ canonical_name: string | null; raw_text: string }>): string[] => {
+      const out: string[] = [];
+      const seen = new Set<string>();
+      for (const item of items) {
+        const value = String(item.canonical_name || item.raw_text || '').trim();
+        if (!value) continue;
+        const key = value.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(value);
+      }
+      return out;
+    };
+
+    return NextResponse.json({
+      ok: true,
+      jdTextUsed: jdText,
+      ...result,
+      normalizedPrefill: {
+        ...result.normalizedPrefill,
+        must_haves: canonicalNames(mustCanonical),
+        nice_to_haves: canonicalNames(niceCanonical),
+        tech_stack: canonicalNames(techCanonical),
+      },
+      canonicalSkills: {
+        must_haves: mustCanonical,
+        nice_to_haves: niceCanonical,
+        tech_stack: techCanonical,
+      },
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to prefill from JD';
     return NextResponse.json({ ok: false, error: message }, { status: 400 });
