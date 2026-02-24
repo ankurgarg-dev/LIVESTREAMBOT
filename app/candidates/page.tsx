@@ -170,6 +170,21 @@ export default function CandidatesPage() {
     }
   };
 
+  const prefillCandidateFromCv = async (file: File | null) => {
+    if (!file) return;
+    try {
+      const form = new FormData();
+      form.set('cv', file);
+      const response = await fetch('/api/candidates/prefill', { method: 'POST', body: form });
+      const json = await response.json();
+      if (!response.ok || json?.ok === false) return;
+      if (json?.candidateName) setCandidateName(String(json.candidateName));
+      if (json?.candidateEmail) setCandidateEmail(String(json.candidateEmail));
+    } catch {
+      // Keep manual entry path on prefill errors.
+    }
+  };
+
   const detailsByCategory = React.useMemo(() => {
     const rows = selected?.detailedScorecard?.details || [];
     return {
@@ -211,17 +226,24 @@ export default function CandidatesPage() {
               <input
                 value={candidateName}
                 onChange={(e) => setCandidateName(e.target.value)}
-                placeholder="Candidate Name"
-                required
+                placeholder="Candidate Name (auto from CV, editable)"
               />
               <input
                 value={candidateEmail}
                 onChange={(e) => setCandidateEmail(e.target.value)}
-                placeholder="Candidate Email"
+                placeholder="Candidate Email (auto from CV, editable)"
                 type="email"
-                required
               />
-              <input id="candidateCvUpload" type="file" accept=".pdf,.doc,.docx,.txt" required />
+              <input
+                id="candidateCvUpload"
+                type="file"
+                accept=".pdf,.doc,.docx,.txt"
+                required
+                onChange={(e) => {
+                  const file = e.target.files?.[0] || null;
+                  void prefillCandidateFromCv(file);
+                }}
+              />
               <div className={styles.row}>
                 <button type="submit" className="lk-button" disabled={saving}>
                   {saving ? 'Scoring...' : 'Submit CV'}
