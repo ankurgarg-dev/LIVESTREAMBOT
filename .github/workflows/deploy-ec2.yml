@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  AWS_REGION: ${{ secrets.AWS_REGION }}
+  AWS_REGION: us-east-1
   EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
 
 jobs:
@@ -25,6 +25,20 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify deploy target
+        run: |
+          set -euo pipefail
+          aws sts get-caller-identity --region "${AWS_REGION}"
+          aws ec2 describe-instances \
+            --instance-ids "${EC2_INSTANCE_ID}" \
+            --region "${AWS_REGION}" \
+            --query "Reservations[0].Instances[0].State.Name" \
+            --output text
+          aws ssm describe-instance-information \
+            --region "${AWS_REGION}" \
+            --query "InstanceInformationList[?InstanceId=='${EC2_INSTANCE_ID}'].PingStatus" \
+            --output text
 
       - name: Trigger EC2 deploy via SSM (remote build)
         id: ssm
@@ -53,11 +67,12 @@ jobs:
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "${EC2_INSTANCE_ID}" \
             --document-name "AWS-RunShellScript" \
+            --region "${AWS_REGION}" \
             --query "Command.CommandId" \
             --output text \
             --parameters "commands=${PARAMS}")
           echo "command_id=${COMMAND_ID}" >> "$GITHUB_OUTPUT"
-          aws ssm wait command-executed --command-id "${COMMAND_ID}" --instance-id "${EC2_INSTANCE_ID}"
+          aws ssm wait command-executed --command-id "${COMMAND_ID}" --instance-id "${EC2_INSTANCE_ID}" --region "${AWS_REGION}"
 
       - name: Print SSM output
         if: always()
@@ -65,5 +80,6 @@ jobs:
           aws ssm get-command-invocation \
             --command-id "${{ steps.ssm.outputs.command_id }}" \
             --instance-id "${EC2_INSTANCE_ID}" \
+            --region "${AWS_REGION}" \
             --query '{Status:Status,StdOut:StandardOutputContent,StdErr:StandardErrorContent}' \
             --output json
