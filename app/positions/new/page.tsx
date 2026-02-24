@@ -160,6 +160,7 @@ function TagInput(props: {
 function NewPositionPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const jdFileInputRef = React.useRef<HTMLInputElement | null>(null);
   const [step, setStep] = React.useState<1 | 2 | 3>(1);
   const [loading, setLoading] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
@@ -169,7 +170,7 @@ function NewPositionPageContent() {
   const [roleTitle, setRoleTitle] = React.useState('');
   const [jdText, setJdText] = React.useState('');
   const [jdFile, setJdFile] = React.useState<File | null>(null);
-  const [createdBy, setCreatedBy] = React.useState('moderator');
+  const createdBy = 'moderator';
 
   const [rawExtraction, setRawExtraction] = React.useState<unknown>(null);
   const [editingPositionId, setEditingPositionId] = React.useState('');
@@ -299,6 +300,9 @@ function NewPositionPageContent() {
 
   const startNew = () => {
     setStep(1);
+    setRoleTitle('');
+    setJdText('');
+    setJdFile(null);
     setEditingPositionId('');
     setRawExtraction(null);
     setPrefill(emptyConfig());
@@ -309,6 +313,9 @@ function NewPositionPageContent() {
     setConfidence(0);
     setError('');
     setSuccess('');
+    if (jdFileInputRef.current) {
+      jdFileInputRef.current.value = '';
+    }
   };
 
   const onJdFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -341,10 +348,7 @@ function NewPositionPageContent() {
 
       <section className={styles.panel}>
         <h3 style={{ margin: 0 }}>Step 1: JD input</h3>
-        <div className={styles.grid2}>
-          <input value={roleTitle} onChange={(e) => setRoleTitle(e.target.value)} placeholder="Role title (optional)" />
-          <input value={createdBy} onChange={(e) => setCreatedBy(e.target.value)} placeholder="Created by" />
-        </div>
+        <input value={roleTitle} onChange={(e) => setRoleTitle(e.target.value)} placeholder="Role title (optional)" />
         <textarea
           rows={8}
           value={jdText}
@@ -352,6 +356,7 @@ function NewPositionPageContent() {
           placeholder="Paste JD text here"
         />
         <input
+          ref={jdFileInputRef}
           type="file"
           accept=".txt,.md,.json,.csv,.doc,.docx,.pdf,text/plain,text/markdown,application/json,text/csv,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf"
           onChange={onJdFileChange}
