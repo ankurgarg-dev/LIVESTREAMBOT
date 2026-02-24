@@ -59,6 +59,7 @@ const BOT_IDENTITY_BASE = (process.env.BOT_IDENTITY || 'bristlecone-ai-agent').t
 const BOT_NAME = (process.env.BOT_NAME || 'Bristlecone AI Agent').trim();
 const ROOM_IDLE_TIMEOUT_MS = Math.max(30000, Number(process.env.AGENT_ROOM_IDLE_TIMEOUT_MS || 180000));
 const ENABLE_BARGE_IN = process.env.ENABLE_BARGE_IN !== 'false';
+const ENABLE_FULL_DUPLEX = process.env.ENABLE_FULL_DUPLEX !== 'false';
 const EMPTY_ROOM_FINALIZE_DELAY_MS = Math.max(
   3000,
   Number(process.env.EMPTY_ROOM_FINALIZE_DELAY_MS || 8000),
@@ -285,6 +286,7 @@ class SpeechTurnDetector {
   constructor({
     transcriptionService,
     onTranscription,
+    onSpeechStart,
     participantIdentity,
     rmsThreshold = STT_VAD_RMS_THRESHOLD,
     minSpeechMs = STT_MIN_SPEECH_MS,
@@ -295,6 +297,7 @@ class SpeechTurnDetector {
   }) {
     this.transcriptionService = transcriptionService;
     this.onTranscription = onTranscription;
+    this.onSpeechStart = onSpeechStart;
     this.participantIdentity = participantIdentity;
 
     this.rmsThreshold = rmsThreshold;
@@ -309,6 +312,7 @@ class SpeechTurnDetector {
     this.silenceFrames = 0;
     this.utteranceFrames = [];
     this.transcribing = false;
+    this.speechStartNotified = false;
   }
 
   async pushFrame(frame) {
@@ -323,6 +327,14 @@ class SpeechTurnDetector {
       this.speechFrames += 1;
       this.silenceFrames = 0;
       this.utteranceFrames.push(new Int16Array(data));
+      if (!this.speechStartNotified) {
+        this.speechStartNotified = true;
+        if (typeof this.onSpeechStart === 'function') {
+          Promise.resolve(this.onSpeechStart()).catch((err) => {
+            console.warn(`[stt][${this.participantIdentity}] onSpeechStart callback error:`, err);
+          });
+        }
+      }
       if (this.utteranceFrames.length >= this.maxUtteranceFrames) {
         await this.flush('max_utterance');
       }
@@ -376,6 +388,7 @@ class SpeechTurnDetector {
     this.speechFrames = 0;
     this.silenceFrames = 0;
     this.utteranceFrames = [];
+    this.speechStartNotified = false;
   }
 }
 
@@ -745,6 +758,11 @@ async function createAgentSession(
   let lastGoodAppBaseUrl = appBaseUrls[0] || '';
   const apiRequestTimeoutMs = Math.max(1200, Number(process.env.AGENT_API_TIMEOUT_MS || 3500));
   const apiRetryCount = Math.max(1, Number(process.env.AGENT_API_RETRY_COUNT || 2));
+  const requestInterruption = () => {
+    if (assistantState === 'idle') return;
+    interruptRequested = true;
+    if (audioPump) audioPump.clear();
+  };
 
   const fetchAppApi = async (pathName, options = {}) => {
     const bases = [lastGoodAppBaseUrl, ...appBaseUrls].filter(Boolean);
@@ -1192,8 +1210,7 @@ async function createAgentSession(
     });
 
     if (ENABLE_BARGE_IN && assistantState !== 'idle') {
-      interruptRequested = true;
-      if (audioPump) audioPump.clear();
+      requestInterruption();
     }
 
     queueWorker = queueWorker.then(drainInputQueue).catch((err) => {
@@ -1217,6 +1234,10 @@ async function createAgentSession(
       transcriptionService,
       participantIdentity: participant.identity,
       ...sttTurnConfig,
+      onSpeechStart: async () => {
+        if (!ENABLE_FULL_DUPLEX || !ENABLE_BARGE_IN) return;
+        requestInterruption();
+      },
       onTranscription: async (text) => {
         queueUserTurn(text, participant.identity);
       },
@@ -1259,8 +1280,7 @@ async function createAgentSession(
           const action = String(parsed?.action || '').trim().toLowerCase();
           if (action === 'pause') {
             isInterviewPaused = true;
-            interruptRequested = true;
-            if (audioPump) audioPump.clear();
+            requestInterruption();
             void publishPauseState();
           } else if (action === 'resume') {
             isInterviewPaused = false;
