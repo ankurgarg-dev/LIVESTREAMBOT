@@ -12,6 +12,7 @@ import {
 } from './types';
 const DEFAULT_DURATION = 60;
 const JD_SKILL_PATTERNS: Array<[RegExp, string]> = [
+  [/\bpython\b/i, 'Python'],
   [/\bjava\b/i, 'Java'],
   [/\bj2ee\b|\bjee\b/i, 'J2EE'],
   [/\bspring\s*boot\b/i, 'Spring Boot'],
@@ -39,6 +40,11 @@ const JD_SKILL_PATTERNS: Array<[RegExp, string]> = [
   [/\banalytics?\b/i, 'Analytics Platforms'],
   [/\bdata platforms?\b/i, 'Data Platforms'],
   [/\bgenai\b|\bgenerative ai\b/i, 'GenAI'],
+  [/\brag\b|\bretrieval[-\s]*augmented generation\b/i, 'Retrieval-Augmented Generation (RAG)'],
+  [/\blangchain\b/i, 'LangChain'],
+  [/\bvector (db|database|databases)\b|\bvector store\b|\bvector index(es)?\b/i, 'Vector Databases'],
+  [/\basync\b|\basynchronous\b|\basyncio\b/i, 'Async Programming'],
+  [/\bmcp\b|\bmodel context protocol\b|\bmcp servers?\b/i, 'MCP Servers'],
   [/\bllms?\b|\blarge language models?\b/i, 'LLMs'],
   [/\bagentic ai\b|\bagentic\b/i, 'Agentic AI'],
 ];
@@ -572,6 +578,16 @@ export function normalizeAndMap(
 
   const jdSignals = extractSkillSignalsFromJdText(opts.jdText);
   const hasExplicitJdSections = jdSignals.must.length > 0 || jdSignals.nice.length > 0;
+  const extractedMust = normalizeSkills(extraction.must_haves || [], {
+    jdText: opts.jdText,
+    roleTitle: opts.roleTitleOverride || extraction.role_title,
+    strict: true,
+  });
+  const extractedNice = normalizeSkills(extraction.nice_to_haves || [], {
+    jdText: opts.jdText,
+    roleTitle: opts.roleTitleOverride || extraction.role_title,
+    strict: true,
+  });
   const jdSignalSkills = normalizeSkills(jdSignals.all, {
     jdText: opts.jdText,
     roleTitle: opts.roleTitleOverride || extraction.role_title,
@@ -587,14 +603,19 @@ export function normalizeAndMap(
     roleTitle: opts.roleTitleOverride || extraction.role_title,
     strict: true,
   });
-  const mustHaves = capStrings(dedupeBySkillKey(hasExplicitJdSections ? jdMustSignals : jdSignalSkills), 8);
+  const mustSeed = hasExplicitJdSections
+    ? [...jdMustSignals, ...extractedMust, ...jdSignalSkills]
+    : [...extractedMust, ...jdSignalSkills];
+  const mustHaves = capStrings(dedupeBySkillKey(mustSeed), 8);
   if (mustHaves.length < 1) {
     missing.add('must_haves');
     warnings.push('Must-haves could not be extracted from JD.');
   }
 
   const mustSet = new Set(mustHaves.map((x) => normalizeLookupKey(x)));
-  const niceToHavesSeed = hasExplicitJdSections ? jdNiceSignals : jdSignalSkills.filter((skill) => !mustSet.has(normalizeLookupKey(skill)));
+  const niceToHavesSeed = hasExplicitJdSections
+    ? [...jdNiceSignals, ...extractedNice]
+    : [...extractedNice, ...jdSignalSkills.filter((skill) => !mustSet.has(normalizeLookupKey(skill)))];
   const niceToHaves = capStrings(dedupeBySkillKey(niceToHavesSeed), 8);
   const techCandidates: TechStackCandidate[] = [
     ...normalizeSkills(extraction.tech_stack || [], { jdText: opts.jdText, strict: true }).map((skill) => ({
