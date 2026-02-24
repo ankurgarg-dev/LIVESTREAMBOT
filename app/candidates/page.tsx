@@ -39,6 +39,18 @@ type CandidateApplication = {
   };
 };
 
+type CandidateProfile = {
+  id: string;
+  fullName: string;
+  email: string;
+  currentTitle?: string;
+  yearsExperience?: string;
+  keySkills?: string[];
+  candidateContext?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 const CATEGORY_LABEL: Record<DetailedSkill['category'], string> = {
   must_have: 'Must Have',
   nice_to_have: 'Nice to Have',
@@ -75,11 +87,16 @@ export default function CandidatesPage() {
   const [positions, setPositions] = React.useState<PositionRecord[]>([]);
   const [selectedPositionId, setSelectedPositionId] = React.useState('');
   const [applications, setApplications] = React.useState<CandidateApplication[]>([]);
+  const [profiles, setProfiles] = React.useState<CandidateProfile[]>([]);
   const [selectedId, setSelectedId] = React.useState('');
   const [initialPositionId, setInitialPositionId] = React.useState('');
 
   const [candidateName, setCandidateName] = React.useState('');
   const [candidateEmail, setCandidateEmail] = React.useState('');
+  const [currentTitle, setCurrentTitle] = React.useState('');
+  const [yearsExperience, setYearsExperience] = React.useState('');
+  const [keySkills, setKeySkills] = React.useState('');
+  const [candidateContext, setCandidateContext] = React.useState('');
 
   const selected = React.useMemo(
     () => applications.find((item) => item.id === selectedId),
@@ -94,14 +111,19 @@ export default function CandidatesPage() {
   }, []);
 
   const loadApplications = React.useCallback(async (positionId: string) => {
-    if (!positionId) {
+    const url = positionId
+      ? `/api/candidates?positionId=${encodeURIComponent(positionId)}`
+      : '/api/candidates';
+    const response = await fetch(url, { cache: 'no-store' });
+    const json = await response.json();
+    if (!response.ok || json?.ok === false) throw new Error(json?.error || 'Failed to load applications');
+    if (json?.kind === 'profiles') {
+      setProfiles(Array.isArray(json?.candidates) ? json.candidates : []);
       setApplications([]);
       return;
     }
-    const response = await fetch(`/api/candidates?positionId=${encodeURIComponent(positionId)}`, { cache: 'no-store' });
-    const json = await response.json();
-    if (!response.ok || json?.ok === false) throw new Error(json?.error || 'Failed to load applications');
     setApplications(Array.isArray(json?.candidates) ? json.candidates : []);
+    setProfiles([]);
   }, []);
 
   const loadData = React.useCallback(async () => {
@@ -144,12 +166,15 @@ export default function CandidatesPage() {
       const cvInput = document.getElementById('candidateCvUpload') as HTMLInputElement | null;
       const cvFile = cvInput?.files?.[0];
       if (!cvFile) throw new Error('Please select a CV file.');
-      if (!selectedPositionId) throw new Error('Please select a position.');
 
       const form = new FormData();
-      form.set('positionId', selectedPositionId);
+      if (selectedPositionId) form.set('positionId', selectedPositionId);
       form.set('candidateName', candidateName);
       form.set('candidateEmail', candidateEmail);
+      form.set('currentTitle', currentTitle);
+      form.set('yearsExperience', yearsExperience);
+      form.set('keySkills', keySkills);
+      form.set('candidateContext', candidateContext);
       form.set('cv', cvFile);
 
       const response = await fetch('/api/candidates', { method: 'POST', body: form });
@@ -158,8 +183,21 @@ export default function CandidatesPage() {
 
       setCandidateName('');
       setCandidateEmail('');
+      setCurrentTitle('');
+      setYearsExperience('');
+      setKeySkills('');
+      setCandidateContext('');
       if (cvInput) cvInput.value = '';
-      setSuccess('Candidate application submitted and scored.');
+      if (json?.openCandidate) {
+        setSuccess('Candidate profile saved as open (not applied to any position yet).');
+      } else {
+        const createdCount = Number(json?.createdCount || 1);
+        setSuccess(
+          createdCount > 1
+            ? `Candidate submitted and screened across ${createdCount} positions.`
+            : 'Candidate application submitted and scored.',
+        );
+      }
       await loadApplications(selectedPositionId);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to submit candidate');
@@ -178,6 +216,10 @@ export default function CandidatesPage() {
       if (!response.ok || json?.ok === false) return;
       if (json?.candidateName) setCandidateName(String(json.candidateName));
       if (json?.candidateEmail) setCandidateEmail(String(json.candidateEmail));
+      if (json?.currentTitle) setCurrentTitle(String(json.currentTitle));
+      if (json?.yearsExperience) setYearsExperience(String(json.yearsExperience));
+      if (Array.isArray(json?.keySkills)) setKeySkills(json.keySkills.map(String).join(', '));
+      if (json?.candidateContext) setCandidateContext(String(json.candidateContext));
     } catch {
       // Keep manual entry path on prefill errors.
     }
@@ -197,8 +239,8 @@ export default function CandidatesPage() {
     <main className={styles.main}>
       <div className={styles.row}>
         <h2 style={{ margin: 0 }}>Candidates</h2>
-        <button type="button" className="lk-button" onClick={() => router.push('/?tab=candidates')}>
-          Back to Candidates Module
+        <button type="button" className="lk-button" onClick={() => router.push('/?tab=dashboard')}>
+          Back to Dashboard
         </button>
       </div>
 
@@ -209,7 +251,7 @@ export default function CandidatesPage() {
       {!loading ? (
         <>
           <section className={styles.panel}>
-            <h3 style={{ margin: 0 }}>Submit CV Against Position</h3>
+            <h3 style={{ margin: 0 }}>Submit CV (Position Optional)</h3>
             <div className={styles.row}>
               <label>Position</label>
               <select value={selectedPositionId} onChange={(e) => setSelectedPositionId(e.target.value)}>
@@ -234,6 +276,21 @@ export default function CandidatesPage() {
                 type="email"
               />
               <input
+                value={currentTitle}
+                onChange={(e) => setCurrentTitle(e.target.value)}
+                placeholder="Current Title (auto from CV, editable)"
+              />
+              <input
+                value={yearsExperience}
+                onChange={(e) => setYearsExperience(e.target.value)}
+                placeholder="Experience (auto from CV, editable)"
+              />
+              <input
+                value={keySkills}
+                onChange={(e) => setKeySkills(e.target.value)}
+                placeholder="Key Skills (comma separated, editable)"
+              />
+              <input
                 id="candidateCvUpload"
                 type="file"
                 accept=".pdf,.doc,.docx,.txt"
@@ -248,35 +305,68 @@ export default function CandidatesPage() {
                   {saving ? 'Scoring...' : 'Submit CV'}
                 </button>
               </div>
+              <textarea
+                rows={5}
+                value={candidateContext}
+                onChange={(e) => setCandidateContext(e.target.value)}
+                placeholder="Candidate profile summary/context (auto from CV, editable)"
+              />
             </form>
           </section>
 
           <section className={styles.panel}>
-            <h3 style={{ margin: 0 }}>Applications</h3>
-            {applications.length === 0 ? <p className={styles.meta}>No CV applications yet.</p> : null}
-            {applications.map((item) => (
-              <div key={item.id} className={styles.card}>
-                <div className={styles.row}>
-                  <strong>{item.candidateName}</strong>
-                  <span className={styles.badge}>{formatRecommendation(item.recommendation)}</span>
-                </div>
-                <div className={styles.meta}>{item.candidateEmail}</div>
-                <div className={styles.meta}>{`Position ID: ${item.positionId}`}</div>
-                <div className={styles.row}>
-                  <span className={styles.score}>{`Relevance: ${pct(item.cvJdScorecard?.overallScore)}/100`}</span>
-                  <span className={styles.meta}>{formatDate(item.createdAt)}</span>
-                </div>
-                <p className={styles.meta}>{item.cvJdScorecard?.summary || item.conclusion}</p>
-                <div className={styles.row}>
-                  <button type="button" className="lk-button" onClick={() => setSelectedId(item.id)}>
-                    View Details
-                  </button>
-                  <a className="lk-button" href={`/api/candidates/${encodeURIComponent(item.id)}/asset`}>
-                    Download CV
-                  </a>
-                </div>
-              </div>
-            ))}
+            <h3 style={{ margin: 0 }}>{selectedPositionId ? 'Applications' : 'Open Candidates'}</h3>
+            {selectedPositionId ? (
+              <>
+                {applications.length === 0 ? <p className={styles.meta}>No CV applications yet.</p> : null}
+                {applications.map((item) => (
+                  <div key={item.id} className={styles.card}>
+                    <div className={styles.row}>
+                      <strong>{item.candidateName}</strong>
+                      <span className={styles.badge}>{formatRecommendation(item.recommendation)}</span>
+                    </div>
+                    <div className={styles.meta}>{item.candidateEmail}</div>
+                    <div className={styles.meta}>{`Position ID: ${item.positionId}`}</div>
+                    <div className={styles.row}>
+                      <span className={styles.score}>{`Relevance: ${pct(item.cvJdScorecard?.overallScore)}/100`}</span>
+                      <span className={styles.meta}>{formatDate(item.createdAt)}</span>
+                    </div>
+                    <p className={styles.meta}>{item.cvJdScorecard?.summary || item.conclusion}</p>
+                    <div className={styles.row}>
+                      <button type="button" className="lk-button" onClick={() => setSelectedId(item.id)}>
+                        View Details
+                      </button>
+                      <a className="lk-button" href={`/api/candidates/${encodeURIComponent(item.id)}/asset`}>
+                        Download CV
+                      </a>
+                    </div>
+                  </div>
+                ))}
+              </>
+            ) : (
+              <>
+                {profiles.length === 0 ? <p className={styles.meta}>No open candidates yet.</p> : null}
+                {profiles.map((item) => (
+                  <div key={item.id} className={styles.card}>
+                    <div className={styles.row}>
+                      <strong>{item.fullName || 'Unknown Candidate'}</strong>
+                      <span className={styles.badge}>Open</span>
+                    </div>
+                    <div className={styles.meta}>{item.email || 'Email not provided'}</div>
+                    <div className={styles.meta}>{item.currentTitle || 'Title not provided'}</div>
+                    <div className={styles.meta}>{item.yearsExperience || 'Experience not provided'}</div>
+                    <div className={styles.meta}>
+                      {Array.isArray(item.keySkills) && item.keySkills.length > 0
+                        ? item.keySkills.join(', ')
+                        : 'Skills not provided'}
+                    </div>
+                    <div className={styles.row}>
+                      <span className={styles.meta}>{`Updated: ${formatDate(item.updatedAt)}`}</span>
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
           </section>
         </>
       ) : null}

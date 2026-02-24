@@ -20,9 +20,23 @@ export type CandidateAssetMeta = {
   size: number;
 };
 
+export type CandidateMasterRecord = {
+  id: string;
+  fullName: string;
+  email: string;
+  currentTitle?: string;
+  yearsExperience?: string;
+  keySkills?: string[];
+  candidateContext?: string;
+  cv?: CandidateAssetMeta;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type CandidateApplicationRecord = {
   id: string;
   positionId: string;
+  candidateId?: string;
   candidateName: string;
   candidateEmail: string;
   candidateContext: string;
@@ -53,12 +67,38 @@ function sanitizeFilename(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
+function asCandidateMasterRecord(value: unknown): CandidateMasterRecord | null {
+  if (!value || typeof value !== 'object') return null;
+  const typed = value as CandidateMasterRecord;
+  return {
+    id: String(typed.id || '').trim(),
+    fullName: String(typed.fullName || '').trim(),
+    email: String(typed.email || '').trim(),
+    currentTitle: String(typed.currentTitle || '').trim() || undefined,
+    yearsExperience: String(typed.yearsExperience || '').trim() || undefined,
+    keySkills: Array.isArray(typed.keySkills) ? typed.keySkills.map(String).filter(Boolean) : undefined,
+    candidateContext: String(typed.candidateContext || '').trim() || undefined,
+    cv:
+      typed.cv && typeof typed.cv === 'object'
+        ? {
+            originalName: String(typed.cv.originalName || ''),
+            storedName: String(typed.cv.storedName || ''),
+            contentType: String(typed.cv.contentType || 'application/octet-stream'),
+            size: Number(typed.cv.size || 0),
+          }
+        : undefined,
+    createdAt: String(typed.createdAt || ''),
+    updatedAt: String(typed.updatedAt || ''),
+  };
+}
+
 function asCandidateRecord(value: unknown): CandidateApplicationRecord | null {
   if (!value || typeof value !== 'object') return null;
   const typed = value as CandidateApplicationRecord;
   return {
     id: String(typed.id || '').trim(),
     positionId: String(typed.positionId || '').trim(),
+    candidateId: String(typed.candidateId || '').trim() || undefined,
     candidateName: String(typed.candidateName || '').trim(),
     candidateEmail: String(typed.candidateEmail || '').trim(),
     candidateContext: String(typed.candidateContext || ''),
@@ -90,6 +130,101 @@ function asCandidateRecord(value: unknown): CandidateApplicationRecord | null {
   };
 }
 
+export async function listCandidates(): Promise<CandidateMasterRecord[]> {
+  const prisma = getPrismaClient();
+  const rows = await prisma.candidate.findMany({ orderBy: { updatedAt: 'desc' } });
+  return rows
+    .map((row: { payload: unknown }) => asCandidateMasterRecord(row.payload))
+    .filter((item: CandidateMasterRecord | null): item is CandidateMasterRecord => Boolean(item));
+}
+
+export async function getCandidate(id: string): Promise<CandidateMasterRecord | undefined> {
+  const prisma = getPrismaClient();
+  const row = await prisma.candidate.findUnique({ where: { id } });
+  const parsed = asCandidateMasterRecord(row?.payload);
+  return parsed ?? undefined;
+}
+
+export async function upsertCandidate(input: {
+  candidateName: string;
+  candidateEmail: string;
+  currentTitle?: string;
+  yearsExperience?: string;
+  keySkills?: string[];
+  candidateContext?: string;
+}): Promise<CandidateMasterRecord> {
+  const prisma = getPrismaClient();
+  const email = String(input.candidateEmail || '').trim().toLowerCase();
+  const fullName = String(input.candidateName || '').trim() || 'Unknown Candidate';
+
+  const existing = email
+    ? await prisma.candidate.findFirst({
+        where: { email },
+        orderBy: { updatedAt: 'desc' },
+      })
+    : null;
+
+  if (existing) {
+    const current: CandidateMasterRecord =
+      asCandidateMasterRecord(existing.payload) || {
+        id: existing.id,
+        fullName,
+        email,
+        currentTitle: undefined,
+        yearsExperience: undefined,
+        keySkills: undefined,
+        candidateContext: undefined,
+        cv: undefined,
+        createdAt: existing.createdAt.toISOString(),
+        updatedAt: existing.updatedAt.toISOString(),
+      };
+    const updated: CandidateMasterRecord = {
+      ...current,
+      fullName: fullName || current.fullName,
+      email: email || current.email,
+      currentTitle: input.currentTitle || current.currentTitle,
+      yearsExperience: input.yearsExperience || current.yearsExperience,
+      keySkills: input.keySkills && input.keySkills.length > 0 ? input.keySkills : current.keySkills,
+      candidateContext: input.candidateContext || current.candidateContext,
+      updatedAt: new Date().toISOString(),
+    };
+    await prisma.candidate.update({
+      where: { id: existing.id },
+      data: {
+        fullName: updated.fullName,
+        email: updated.email,
+        updatedAt: new Date(updated.updatedAt),
+        payload: updated,
+      },
+    });
+    return updated;
+  }
+
+  const now = new Date().toISOString();
+  const created: CandidateMasterRecord = {
+    id: randomUUID(),
+    fullName,
+    email,
+    currentTitle: String(input.currentTitle || '').trim() || undefined,
+    yearsExperience: String(input.yearsExperience || '').trim() || undefined,
+    keySkills: Array.isArray(input.keySkills) ? input.keySkills.map(String).filter(Boolean) : undefined,
+    candidateContext: String(input.candidateContext || '').trim() || undefined,
+    createdAt: now,
+    updatedAt: now,
+  };
+  await prisma.candidate.create({
+    data: {
+      id: created.id,
+      fullName: created.fullName,
+      email: created.email,
+      createdAt: new Date(created.createdAt),
+      updatedAt: new Date(created.updatedAt),
+      payload: created,
+    },
+  });
+  return created;
+}
+
 export async function listCandidateApplications(positionId?: string): Promise<CandidateApplicationRecord[]> {
   const prisma = getPrismaClient();
   const rows = await prisma.candidateApplication.findMany({
@@ -110,6 +245,7 @@ export async function getCandidateApplication(id: string): Promise<CandidateAppl
 
 export async function createCandidateApplication(input: {
   positionId: string;
+  candidateId?: string;
   candidateName: string;
   candidateEmail: string;
   candidateContext: string;
@@ -125,10 +261,23 @@ export async function createCandidateApplication(input: {
   conclusion: string;
 }): Promise<CandidateApplicationRecord> {
   const prisma = getPrismaClient();
+  if (input.candidateId) {
+    const existing = await prisma.candidateApplication.findFirst({
+      where: {
+        candidateId: input.candidateId,
+        positionId: input.positionId,
+      },
+      select: { id: true },
+    });
+    if (existing) {
+      throw new Error('Candidate is already applied to this position.');
+    }
+  }
   const now = new Date().toISOString();
   const record: CandidateApplicationRecord = {
     id: randomUUID(),
     positionId: input.positionId,
+    candidateId: String(input.candidateId || '').trim() || undefined,
     candidateName: input.candidateName,
     candidateEmail: input.candidateEmail,
     candidateContext: input.candidateContext,
@@ -145,6 +294,7 @@ export async function createCandidateApplication(input: {
     data: {
       id: record.id,
       positionId: record.positionId,
+      candidateId: record.candidateId,
       candidateName: record.candidateName,
       candidateEmail: record.candidateEmail,
       overallScore: Number(record.cvJdScorecard?.overallScore || 0),
@@ -199,6 +349,27 @@ export async function attachCandidateCv(
       recommendation: updated.recommendation,
     },
   });
+
+  if (updated.candidateId) {
+    const candidate = await getCandidate(updated.candidateId);
+    if (candidate) {
+      const candidateUpdated: CandidateMasterRecord = {
+        ...candidate,
+        cv: updated.cv,
+        updatedAt: new Date().toISOString(),
+      };
+      await prisma.candidate.update({
+        where: { id: candidate.id },
+        data: {
+          fullName: candidateUpdated.fullName,
+          email: candidateUpdated.email,
+          updatedAt: new Date(candidateUpdated.updatedAt),
+          payload: candidateUpdated,
+        },
+      });
+    }
+  }
+
   return updated;
 }
 

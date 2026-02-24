@@ -19,6 +19,10 @@ export async function POST(req: NextRequest) {
       ok: true,
       candidateName: profile.candidateName,
       candidateEmail: profile.candidateEmail,
+      currentTitle: profile.currentTitle,
+      yearsExperience: profile.yearsExperience,
+      keySkills: profile.keySkills,
+      candidateContext: profile.candidateContext,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to prefill candidate details from CV';

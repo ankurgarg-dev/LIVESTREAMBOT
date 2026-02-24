@@ -241,6 +241,22 @@ function guessCandidateName(text: string): string {
   return '';
 }
 
+function guessCurrentTitle(text: string): string {
+  const lines = String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (const line of lines.slice(0, 30)) {
+    if (line.length < 4 || line.length > 80) continue;
+    if (/[@|]/.test(line)) continue;
+    if (/\b(resume|curriculum vitae|cv|profile|summary|experience|education|skills|contact)\b/i.test(line)) continue;
+    if (/\b(engineer|developer|architect|manager|analyst|consultant|scientist|lead|specialist|administrator)\b/i.test(line)) {
+      return line.replace(/\s+/g, ' ');
+    }
+  }
+  return '';
+}
+
 async function readUploadedDocumentText(file: UploadedFile): Promise<string> {
   const name = String(file.name || '').toLowerCase();
   const buffer = Buffer.from(await file.arrayBuffer());
@@ -268,15 +284,29 @@ export async function extractCandidateProfileFromUpload(file: UploadedFile | nul
   candidateContext: string;
   candidateName: string;
   candidateEmail: string;
+  currentTitle: string;
+  yearsExperience: string;
+  keySkills: string[];
 }> {
   if (!file || file.size <= 0) {
-    return { candidateContext: '', candidateName: '', candidateEmail: '' };
+    return {
+      candidateContext: '',
+      candidateName: '',
+      candidateEmail: '',
+      currentTitle: '',
+      yearsExperience: '',
+      keySkills: [],
+    };
   }
   const rawText = await extractTextFromUpload(file);
+  const compact = compactText(rawText, 9000);
   return {
-    candidateContext: buildCandidateContext(rawText),
-    candidateName: guessCandidateName(rawText),
-    candidateEmail: guessCandidateEmail(rawText),
+    candidateContext: buildCandidateContext(compact),
+    candidateName: guessCandidateName(compact),
+    candidateEmail: guessCandidateEmail(compact),
+    currentTitle: guessCurrentTitle(compact),
+    yearsExperience: detectYearsExperience(compact),
+    keySkills: detectSkills(compact),
   };
 }
 

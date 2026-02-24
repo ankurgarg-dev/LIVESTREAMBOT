@@ -31,6 +31,20 @@ model Position {
   @@index([updatedAt(sort: Desc)])
 }
 
+model Candidate {
+  id        String   @id
+  fullName  String
+  email     String
+  createdAt DateTime
+  updatedAt DateTime
+  payload   Json
+
+  applications CandidateApplication[]
+
+  @@index([email])
+  @@index([updatedAt(sort: Desc)])
+}
+
 model AgentSetting {
   id        Int      @id
   payload   Json
@@ -40,6 +54,7 @@ model AgentSetting {
 model CandidateApplication {
   id           String   @id
   positionId   String
+  candidateId  String?
   candidateName String
   candidateEmail String
   overallScore Int
@@ -48,7 +63,11 @@ model CandidateApplication {
   updatedAt    DateTime
   payload      Json
 
+  candidate Candidate? @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@unique([candidateId, positionId])
   @@index([positionId, updatedAt(sort: Desc)])
+  @@index([candidateId, updatedAt(sort: Desc)])
   @@index([updatedAt(sort: Desc)])
 }
 
