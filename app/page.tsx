@@ -15,8 +15,7 @@ import styles from '../styles/Home.module.css';
 
 type Recommendation = 'strong_hire' | 'hire' | 'hold' | 'no_hire' | '';
 type AgentType = 'classic' | 'realtime_screening';
-type MainTab = 'dashboard' | 'positions' | 'interviews' | 'settings';
-type PositionDetailsTab = 'job' | 'plan' | 'candidates' | 'interviews';
+type MainTab = 'dashboard' | 'positions' | 'candidates' | 'interviews' | 'settings';
 type SkillCalibrationCategory = 'must_have' | 'nice_to_have';
 type SkillCalibrationItem = {
   skill: string;
@@ -211,7 +210,14 @@ function toListInput(value: string[]): string {
 }
 
 function normalizeTab(value: string | null): MainTab {
-  if (value === 'positions' || value === 'interviews' || value === 'settings') return value;
+  if (
+    value === 'positions' ||
+    value === 'candidates' ||
+    value === 'interviews' ||
+    value === 'settings'
+  ) {
+    return value;
+  }
   return 'dashboard';
 }
 
@@ -271,7 +277,6 @@ export default function Page() {
   const defaultAgentRoom = 'agent-test-room';
 
   const [activeTab, setActiveTab] = useState<MainTab>('dashboard');
-  const [positionsTab, setPositionsTab] = useState<PositionDetailsTab>('job');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -306,11 +311,6 @@ export default function Page() {
   const selectedPosition = useMemo(
     () => positions.find((item) => item.position_id === selectedPositionId),
     [positions, selectedPositionId],
-  );
-
-  const interviewsForSelectedPosition = useMemo(
-    () => interviews.filter((item) => item.positionId === selectedPositionId),
-    [interviews, selectedPositionId],
   );
 
   const todayInterviews = useMemo(() => {
@@ -428,6 +428,10 @@ export default function Page() {
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     const tab = normalizeTab(q.get('tab'));
+    if (tab === 'candidates') {
+      router.replace('/candidates');
+      return;
+    }
     setActiveTab(tab);
     const interviewId = q.get('interviewId') || '';
     if (interviewId) {
@@ -467,6 +471,10 @@ export default function Page() {
   }, [selectedOutcome]);
 
   const switchTab = (tab: MainTab) => {
+    if (tab === 'candidates') {
+      router.push('/candidates');
+      return;
+    }
     setActiveTab(tab);
     router.push(`/?tab=${tab}`);
   };
@@ -845,6 +853,9 @@ export default function Page() {
             <button type="button" className="lk-button" aria-pressed={activeTab === 'positions'} onClick={() => switchTab('positions')}>
               Positions
             </button>
+            <button type="button" className="lk-button" aria-pressed={activeTab === 'candidates'} onClick={() => switchTab('candidates')}>
+              Candidates
+            </button>
             <button type="button" className="lk-button" aria-pressed={activeTab === 'interviews'} onClick={() => switchTab('interviews')}>
               Interviews
             </button>
@@ -912,24 +923,8 @@ export default function Page() {
           {!loading && activeTab === 'positions' ? (
             <div className={styles.tabContent}>
               <div className={styles.cardButtons}>
-                <button type="button" className="lk-button" onClick={() => switchTab('dashboard')}>
-                  Back to Home
-                </button>
                 <button type="button" className="lk-button" onClick={() => router.push('/positions/new')}>
                   New Position Setup
-                </button>
-                <button
-                  type="button"
-                  className="lk-button"
-                  onClick={() =>
-                    router.push(
-                      selectedPositionId
-                        ? `/candidates?positionId=${encodeURIComponent(selectedPositionId)}`
-                        : '/candidates',
-                    )
-                  }
-                >
-                  Candidates Module
                 </button>
               </div>
 
@@ -945,129 +940,43 @@ export default function Page() {
                   </select>
 
                   {selectedPosition && positionDraft ? (
-                    <>
-                      <div className={styles.tabSelect}>
-                        <button type="button" className="lk-button" aria-pressed={positionsTab === 'job'} onClick={() => setPositionsTab('job')}>
-                          Job Description
+                    <div className={styles.reportPanel}>
+                      <h4 style={{ marginTop: 0 }}>{positionDraft.role_title}</h4>
+                      <p className={styles.interviewMeta}>{positionDraft.notes_for_interviewer || 'No JD notes saved for this position.'}</p>
+                      <p className={styles.interviewMeta}>{`Level: ${positionDraft.level} | Duration: ${positionDraft.duration_minutes}m`}</p>
+                      <p className={styles.interviewMeta}>{`Focus areas: ${positionDraft.focus_areas.join(', ') || 'None'}`}</p>
+                      <p className={styles.interviewMeta}>
+                        {`Must-haves: ${positionDraft.must_haves.join(', ') || 'None'} | Nice-to-haves: ${
+                          positionDraft.nice_to_haves.join(', ') || 'None'
+                        }`}
+                      </p>
+                      <p className={styles.interviewMeta}>{`Tech stack: ${positionDraft.tech_stack.join(', ') || 'None'}`}</p>
+                      <p className={styles.interviewMeta}>
+                        {`Scorecard policy: ${positionDraft.evaluation_policy} | Strictness: ${positionDraft.strictness}`}
+                      </p>
+                      <div className={styles.cardButtons}>
+                        <button
+                          type="button"
+                          className="lk-button"
+                          onClick={() =>
+                            router.push(`/positions/new?positionId=${encodeURIComponent(selectedPosition.position_id)}`)
+                          }
+                        >
+                          Edit Position
                         </button>
-                        <button type="button" className="lk-button" aria-pressed={positionsTab === 'plan'} onClick={() => setPositionsTab('plan')}>
-                          Interview Plan
+                        <button type="button" className="lk-button" onClick={openSkillsCalibration}>
+                          Manage Skills Calibration
                         </button>
-                        <button type="button" className="lk-button" aria-pressed={positionsTab === 'candidates'} onClick={() => setPositionsTab('candidates')}>
-                          Candidates
-                        </button>
-                        <button type="button" className="lk-button" aria-pressed={positionsTab === 'interviews'} onClick={() => setPositionsTab('interviews')}>
-                          Interviews
+                        <button
+                          type="button"
+                          className="lk-button"
+                          onClick={() => deletePositionById(selectedPosition.position_id)}
+                          disabled={saving}
+                        >
+                          Delete Position
                         </button>
                       </div>
-
-                      {positionsTab === 'job' ? (
-                        <div className={styles.reportPanel}>
-                          <h4 style={{ marginTop: 0 }}>{positionDraft.role_title}</h4>
-                          <p className={styles.interviewMeta}>{positionDraft.notes_for_interviewer || 'No JD notes saved for this position.'}</p>
-                          <p className={styles.interviewMeta}>{`Level: ${positionDraft.level}`}</p>
-                          <p className={styles.interviewMeta}>
-                            {`Must-haves: ${positionDraft.must_haves.join(', ') || 'None'} | Nice-to-haves: ${
-                              positionDraft.nice_to_haves.join(', ') || 'None'
-                            }`}
-                          </p>
-                          <div className={styles.cardButtons}>
-                            <button
-                              type="button"
-                              className="lk-button"
-                              onClick={() =>
-                                router.push(`/positions/new?positionId=${encodeURIComponent(selectedPosition.position_id)}`)
-                              }
-                            >
-                              Edit Position
-                            </button>
-                            <button type="button" className="lk-button" onClick={openSkillsCalibration}>
-                              Manage Skills Calibration
-                            </button>
-                            <button
-                              type="button"
-                              className="lk-button"
-                              onClick={() => deletePositionById(selectedPosition.position_id)}
-                              disabled={saving}
-                            >
-                              Delete Position
-                            </button>
-                          </div>
-                        </div>
-                      ) : null}
-
-                      {positionsTab === 'plan' ? (
-                        <div className={styles.reportPanel}>
-                          <p className={styles.interviewMeta}>{`Duration: ${positionDraft.duration_minutes}m`}</p>
-                          <p className={styles.interviewMeta}>{`Focus areas: ${positionDraft.focus_areas.join(', ') || 'None'}`}</p>
-                          <p className={styles.interviewMeta}>{`Scorecard policy: ${positionDraft.evaluation_policy} | Strictness: ${positionDraft.strictness}`}</p>
-                          <p className={styles.interviewMeta}>{`Question sets / must-haves: ${positionDraft.must_haves.join(', ') || 'None'}`}</p>
-                        </div>
-                      ) : null}
-
-                      {positionsTab === 'candidates' ? (
-                        <div className={styles.interviewList}>
-                          <div className={styles.cardButtons}>
-                            <button
-                              type="button"
-                              className="lk-button"
-                              onClick={() =>
-                                router.push(
-                                  selectedPositionId
-                                    ? `/candidates?positionId=${encodeURIComponent(selectedPositionId)}`
-                                    : '/candidates',
-                                )
-                              }
-                            >
-                              Open CV Applications
-                            </button>
-                          </div>
-                          {interviewsForSelectedPosition.length === 0 ? <p>No candidates in pipeline yet.</p> : null}
-                          {interviewsForSelectedPosition.map((item) => (
-                            <div key={item.id} className={styles.interviewCard}>
-                              <div className={styles.interviewHeader}>
-                                <strong>{item.candidateName}</strong>
-                                <span>{item.status.toUpperCase()}</span>
-                              </div>
-                              <div className={styles.interviewMeta}>
-                                <span>{item.candidateEmail}</span>
-                                <span>{formatDate(item.scheduledAt)}</span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
-
-                      {positionsTab === 'interviews' ? (
-                        <div className={styles.interviewList}>
-                          {interviewsForSelectedPosition.length === 0 ? <p>No interviews scheduled/completed for this position.</p> : null}
-                          {interviewsForSelectedPosition.map((item) => (
-                            <div key={item.id} className={styles.interviewCard}>
-                              <div className={styles.interviewHeader}>
-                                <strong>{item.candidateName}</strong>
-                                <span>{item.status.toUpperCase()}</span>
-                              </div>
-                              <div className={styles.interviewMeta}>
-                                <span>{formatDate(item.scheduledAt)}</span>
-                                <span>{`Room ${item.roomName}`}</span>
-                                <span>{formatScoreTag(item.cvJdScorecard)}</span>
-                              </div>
-                              <div className={styles.cardButtons}>
-                                <button type="button" className="lk-button" onClick={() => router.push(buildInterviewJoinUrl(item))}>
-                                  Join
-                                </button>
-                                <button type="button" className="lk-button" onClick={() => setSelectedCvJdInterviewId(item.id)}>
-                                  View CV-JD Score
-                                </button>
-                                <button type="button" className="lk-button" onClick={() => openOutcome(item.id)}>
-                                  View outcomes
-                                </button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
-                    </>
+                    </div>
                   ) : null}
                 </>
               ) : null}

@@ -111,8 +111,7 @@ export default function CandidatesPage() {
       const loaded = await loadPositions();
       setPositions(loaded);
       const fromQuery = String(initialPositionId || '').trim();
-      const fallback = loaded[0]?.position_id || '';
-      const chosen = loaded.some((p: PositionRecord) => p.position_id === fromQuery) ? fromQuery : fallback;
+      const chosen = loaded.some((p: PositionRecord) => p.position_id === fromQuery) ? fromQuery : '';
       setSelectedPositionId(chosen);
       await loadApplications(chosen);
     } catch (e) {
@@ -132,7 +131,6 @@ export default function CandidatesPage() {
   }, [loadData]);
 
   React.useEffect(() => {
-    if (!selectedPositionId) return;
     setSelectedId('');
     void loadApplications(selectedPositionId);
   }, [loadApplications, selectedPositionId]);
@@ -198,9 +196,9 @@ export default function CandidatesPage() {
   return (
     <main className={styles.main}>
       <div className={styles.row}>
-        <h2 style={{ margin: 0 }}>Candidates Module</h2>
-        <button type="button" className="lk-button" onClick={() => router.push('/?tab=positions')}>
-          Back to Positions
+        <h2 style={{ margin: 0 }}>Candidates</h2>
+        <button type="button" className="lk-button" onClick={() => router.push('/?tab=candidates')}>
+          Back to Candidates Module
         </button>
       </div>
 
@@ -215,6 +213,7 @@ export default function CandidatesPage() {
             <div className={styles.row}>
               <label>Position</label>
               <select value={selectedPositionId} onChange={(e) => setSelectedPositionId(e.target.value)}>
+                <option value="">All Positions</option>
                 {positions.map((position) => (
                   <option key={position.position_id} value={position.position_id}>
                     {position.role_title} ({position.level})
@@ -254,7 +253,7 @@ export default function CandidatesPage() {
 
           <section className={styles.panel}>
             <h3 style={{ margin: 0 }}>Applications</h3>
-            {applications.length === 0 ? <p className={styles.meta}>No CV applications yet for this position.</p> : null}
+            {applications.length === 0 ? <p className={styles.meta}>No CV applications yet.</p> : null}
             {applications.map((item) => (
               <div key={item.id} className={styles.card}>
                 <div className={styles.row}>
@@ -262,6 +261,7 @@ export default function CandidatesPage() {
                   <span className={styles.badge}>{formatRecommendation(item.recommendation)}</span>
                 </div>
                 <div className={styles.meta}>{item.candidateEmail}</div>
+                <div className={styles.meta}>{`Position ID: ${item.positionId}`}</div>
                 <div className={styles.row}>
                   <span className={styles.score}>{`Relevance: ${pct(item.cvJdScorecard?.overallScore)}/100`}</span>
                   <span className={styles.meta}>{formatDate(item.createdAt)}</span>
