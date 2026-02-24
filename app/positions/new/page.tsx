@@ -157,7 +157,7 @@ function TagInput(props: {
   );
 }
 
-export default function NewPositionPage() {
+function NewPositionPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [step, setStep] = React.useState<1 | 2 | 3>(1);
@@ -515,5 +515,13 @@ export default function NewPositionPage() {
         </section>
       ) : null}
     </main>
+  );
+}
+
+export default function NewPositionPage() {
+  return (
+    <React.Suspense fallback={<main className={styles.main}>Loading...</main>}>
+      <NewPositionPageContent />
+    </React.Suspense>
   );
 }
