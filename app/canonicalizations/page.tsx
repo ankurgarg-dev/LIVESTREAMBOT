@@ -39,6 +39,17 @@ type PrefillResponse = {
   error?: string;
 };
 
+type CvSuggestion = {
+  action: 'add_alias' | 'add_skill';
+  sourceText: string;
+  canonicalName: string;
+  canonicalSkillId: number | null;
+  confidence: number;
+  reason: string;
+  suggestedMatchType: 'EXACT' | 'PHRASE' | 'REGEX';
+  suggestedSkillType: string;
+};
+
 export default function CanonicalizationsPage() {
   const [skills, setSkills] = useState<Skill[]>([]);
   const [loading, setLoading] = useState(false);
@@ -49,6 +60,10 @@ export default function CanonicalizationsPage() {
   const [jdText, setJdText] = useState('');
   const [jdFile, setJdFile] = useState<File | null>(null);
   const [importing, setImporting] = useState(false);
+  const [cvFile, setCvFile] = useState<File | null>(null);
+  const [analyzingCv, setAnalyzingCv] = useState(false);
+  const [applyingCv, setApplyingCv] = useState(false);
+  const [cvSuggestions, setCvSuggestions] = useState<CvSuggestion[]>([]);
 
   const [aliasDraft, setAliasDraft] = useState<Record<number, { aliasText: string; matchType: 'EXACT' | 'PHRASE' | 'REGEX'; confidence: number }>>({});
   const [blockDraft, setBlockDraft] = useState<Record<number, { patternText: string; matchType: 'EXACT' | 'PHRASE' | 'REGEX' }>>({});
@@ -285,6 +300,61 @@ export default function CanonicalizationsPage() {
     }
   }
 
+  async function analyzeCv() {
+    setMessage('');
+    setAnalyzingCv(true);
+    try {
+      if (!cvFile) throw new Error('Please choose a CV file first.');
+      const form = new FormData();
+      form.set('cvFile', cvFile);
+      const res = await fetch('/api/skills/import-cv', { method: 'POST', body: form });
+      const json = (await res.json()) as {
+        ok: boolean;
+        error?: string;
+        suggestions?: CvSuggestion[];
+        extractedTermCount?: number;
+      };
+      if (!json.ok) throw new Error(json.error || 'Failed to analyze CV');
+      const suggestions = Array.isArray(json.suggestions) ? json.suggestions : [];
+      setCvSuggestions(suggestions);
+      setMessage(`CV analyzed. Found ${suggestions.length} mapping suggestions.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to analyze CV');
+    } finally {
+      setAnalyzingCv(false);
+    }
+  }
+
+  async function applyCvSuggestions() {
+    setMessage('');
+    setApplyingCv(true);
+    try {
+      if (!cvSuggestions.length) throw new Error('No suggestions to apply.');
+      const res = await fetch('/api/skills/import-cv', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ suggestions: cvSuggestions }),
+      });
+      const json = (await res.json()) as {
+        ok: boolean;
+        error?: string;
+        appliedCount?: number;
+        addedSkills?: number;
+        addedAliases?: number;
+      };
+      if (!json.ok) throw new Error(json.error || 'Failed to apply CV suggestions');
+      setMessage(
+        `Applied ${json.appliedCount || 0} suggestions (skills ${json.addedSkills || 0}, aliases ${json.addedAliases || 0}).`,
+      );
+      setCvSuggestions([]);
+      await loadSkills();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to apply CV suggestions');
+    } finally {
+      setApplyingCv(false);
+    }
+  }
+
   return (
     <div className={styles.page}>
       <h1>Canonical Skills Manager</h1>
@@ -302,6 +372,37 @@ export default function CanonicalizationsPage() {
         <button type="button" className={styles.button} onClick={importFromJd} disabled={importing}>
           {importing ? 'Importing...' : 'Import JD'}
         </button>
+      </section>
+
+      <section className={styles.panel}>
+        <h2>Import From CV</h2>
+        <p className={styles.help}>Analyze CV text to suggest new canonical skills and synonym aliases.</p>
+        <div className={styles.row}>
+          <input type="file" onChange={(e) => setCvFile(e.target.files?.[0] || null)} />
+          <button type="button" className={styles.button} onClick={analyzeCv} disabled={analyzingCv}>
+            {analyzingCv ? 'Analyzing...' : 'Analyze CV'}
+          </button>
+          <button
+            type="button"
+            className={styles.button}
+            onClick={applyCvSuggestions}
+            disabled={applyingCv || cvSuggestions.length === 0}
+          >
+            {applyingCv ? 'Applying...' : `Apply Suggestions (${cvSuggestions.length})`}
+          </button>
+        </div>
+        {cvSuggestions.length > 0 ? (
+          <div className={styles.suggestionList}>
+            {cvSuggestions.map((s, idx) => (
+              <div key={`${s.sourceText}-${s.canonicalName}-${idx}`} className={styles.suggestionRow}>
+                <span className={styles.tag}>{s.action === 'add_alias' ? 'Alias' : 'New Skill'}</span>
+                <span className={styles.sourceText}>{s.sourceText}</span>
+                <span>{s.action === 'add_alias' ? `-> ${s.canonicalName}` : `-> ${s.suggestedSkillType}`}</span>
+                <span className={styles.confidence}>{Math.round(s.confidence * 100)}%</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </section>
 
       <section className={styles.panel}>

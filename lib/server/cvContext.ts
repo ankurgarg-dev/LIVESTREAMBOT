@@ -259,6 +259,11 @@ async function readUploadedDocumentText(file: UploadedFile): Promise<string> {
   return '';
 }
 
+export async function extractTextFromUpload(file: UploadedFile | null | undefined): Promise<string> {
+  if (!file || file.size <= 0) return '';
+  return await readUploadedDocumentText(file).catch(() => '');
+}
+
 export async function extractCandidateProfileFromUpload(file: UploadedFile | null | undefined): Promise<{
   candidateContext: string;
   candidateName: string;
@@ -267,7 +272,7 @@ export async function extractCandidateProfileFromUpload(file: UploadedFile | nul
   if (!file || file.size <= 0) {
     return { candidateContext: '', candidateName: '', candidateEmail: '' };
   }
-  const rawText = await readUploadedDocumentText(file).catch(() => '');
+  const rawText = await extractTextFromUpload(file);
   return {
     candidateContext: buildCandidateContext(rawText),
     candidateName: guessCandidateName(rawText),

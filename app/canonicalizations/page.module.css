@@ -81,6 +81,46 @@
   margin-top: 10px;
 }
 
+.suggestionList {
+  margin-top: 10px;
+  border: 1px solid #d4e1ec;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.suggestionRow {
+  display: grid;
+  grid-template-columns: auto 2fr 2fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border-top: 1px solid #e7eef4;
+}
+
+.suggestionRow:first-child {
+  border-top: 0;
+}
+
+.tag {
+  border: 1px solid #9ab9cf;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: #2c5876;
+  background: #edf5fb;
+  width: fit-content;
+}
+
+.sourceText {
+  font-weight: 600;
+  color: #1f3a4e;
+}
+
+.confidence {
+  color: #2f6a32;
+  font-weight: 600;
+}
+
 @media (max-width: 900px) {
   .skillHeader {
     grid-template-columns: 1fr;
@@ -93,5 +133,9 @@
   .row {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .suggestionRow {
+    grid-template-columns: 1fr;
   }
 }
