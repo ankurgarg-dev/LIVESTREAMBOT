@@ -32,6 +32,10 @@ type BlockRuleRow = {
   matchType: MatchType;
 };
 
+function hasCanonicalizationModels(prisma: any): boolean {
+  return Boolean(prisma?.skillAlias?.findMany) && Boolean(prisma?.skillBlockRule?.findMany);
+}
+
 function cleanInput(text: string): string {
   return String(text || '').trim().replace(/\s+/g, ' ');
 }
@@ -86,6 +90,7 @@ function matchesByType(inputRaw: string, aliasRaw: string, matchType: MatchType)
 
 async function findAliasMatches(rawText: string, tenantId?: string | null): Promise<AliasRow[]> {
   const prisma = getPrismaClient();
+  if (!hasCanonicalizationModels(prisma)) return [];
   const aliases = (await prisma.skillAlias.findMany({
     where: tenantId
       ? {
@@ -114,6 +119,7 @@ async function findAliasMatches(rawText: string, tenantId?: string | null): Prom
 
 async function isBlocked(rawText: string, skillId: number, tenantId?: string | null): Promise<boolean> {
   const prisma = getPrismaClient();
+  if (!hasCanonicalizationModels(prisma)) return false;
   const rules = (await prisma.skillBlockRule.findMany({
     where: tenantId
       ? {
