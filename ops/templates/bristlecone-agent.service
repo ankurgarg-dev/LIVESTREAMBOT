@@ -1,0 +1,15 @@
+[Unit]
+Description=Bristlecone LiveKit AI Agent
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/bristlecone-app/agent-service
+EnvironmentFile=-/etc/bristlecone/agent.env
+ExecStart=/usr/bin/env npm run start
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -13,6 +13,7 @@ concurrency:
 env:
   AWS_REGION: us-east-1
   EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
+  DEPLOY_ENABLE_AGENT: "0"
 
 jobs:
   deploy:
@@ -79,12 +80,10 @@ jobs:
             "pnpm prisma:generate",
             "pnpm prisma:push",
             "pnpm build",
-            "npm --prefix /opt/bristlecone-app/agent-service install --omit=dev",
-            "sudo systemctl restart bristlecone-agent.service",
-            "sudo systemctl is-active bristlecone-agent.service",
             "sudo systemctl restart bristlecone-app.service",
             "sleep 2",
             "sudo systemctl is-active bristlecone-app.service",
+            "if [ \"${DEPLOY_ENABLE_AGENT}\" = \"1\" ]; then npm --prefix /opt/bristlecone-app/agent-service install --omit=dev; sudo systemctl restart bristlecone-agent.service; sudo systemctl is-active bristlecone-agent.service; fi",
             "git rev-parse --short HEAD",
             "cat .next/BUILD_ID"
           ]')
