@@ -30,15 +30,31 @@ jobs:
         run: |
           set -euo pipefail
           aws sts get-caller-identity --region "${AWS_REGION}"
-          aws ec2 describe-instances \
+          STATE=$(aws ec2 describe-instances \
             --instance-ids "${EC2_INSTANCE_ID}" \
             --region "${AWS_REGION}" \
             --query "Reservations[0].Instances[0].State.Name" \
-            --output text
-          aws ssm describe-instance-information \
-            --region "${AWS_REGION}" \
-            --query "InstanceInformationList[?InstanceId=='${EC2_INSTANCE_ID}'].PingStatus" \
-            --output text
+            --output text)
+          echo "EC2 state: ${STATE}"
+          if [ "${STATE}" != "running" ]; then
+            aws ec2 start-instances --instance-ids "${EC2_INSTANCE_ID}" --region "${AWS_REGION}" >/dev/null
+            aws ec2 wait instance-running --instance-ids "${EC2_INSTANCE_ID}" --region "${AWS_REGION}"
+          fi
+
+          echo "Waiting for SSM Online..."
+          for _ in $(seq 1 30); do
+            PING=$(aws ssm describe-instance-information \
+              --region "${AWS_REGION}" \
+              --query "InstanceInformationList[?InstanceId=='${EC2_INSTANCE_ID}'].PingStatus | [0]" \
+              --output text)
+            if [ "${PING}" = "Online" ]; then
+              echo "SSM PingStatus: ${PING}"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Instance ${EC2_INSTANCE_ID} is not SSM Online."
+          exit 1
 
       - name: Trigger EC2 deploy via SSM (remote build)
         id: ssm
