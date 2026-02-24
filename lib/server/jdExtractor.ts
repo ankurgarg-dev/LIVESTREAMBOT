@@ -296,6 +296,7 @@ export async function extractAndPrefillPosition(input: {
       }
     }
   } catch (error) {
+    const reason = error instanceof Error ? error.message : 'Unknown error';
     const fallback = fallbackExtraction(inferredRoleTitle, jdText);
     const normalized = normalizeAndMap(fallback, {
       jdText,
@@ -312,7 +313,7 @@ export async function extractAndPrefillPosition(input: {
       normalizedPrefill: applyDeterministicMapping(normalized.prefill, { skillTypeByName }),
       extractionConfidence: normalized.confidence,
       missingFields: normalized.missingFields,
-      warnings: ['LLM extraction failed. Fallback prefill used.'],
+      warnings: [`LLM extraction failed (${reason}). Fallback prefill used.`],
       summary: `Prepared fallback prefill for ${normalized.prefill.role_title}.`,
     };
   }

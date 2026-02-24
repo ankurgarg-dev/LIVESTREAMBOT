@@ -88,9 +88,11 @@ Required env (server):
 - `LIVEKIT_API_KEY`
 - `LIVEKIT_API_SECRET`
 - `RECORDING_S3_BUCKET` (or legacy `S3_BUCKET`)
+- `OPENAI_API_KEY` (required for JD prefill LLM extraction)
 
 Optional env:
 
+- `OPENAI_PREFILL_MODEL` (default: `gpt-4o-mini`)
 - `RECORDING_S3_REGION`
 - `RECORDING_S3_ENDPOINT`
 - `RECORDING_S3_PREFIX` (default: `recordings`)
