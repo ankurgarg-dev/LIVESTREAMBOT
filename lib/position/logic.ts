@@ -54,6 +54,12 @@ const NON_TECH_STACK_SKILLS = new Set([
   'Technical Leadership',
   'Coding Fundamentals',
 ]);
+const SOFT_OR_GENERIC_SKILLS = new Set([
+  'Problem Solving',
+  'Communication',
+  'Technical Leadership',
+  'Coding Fundamentals',
+]);
 const TECH_STACK_TYPES = new Set(['tool', 'platform', 'framework', 'database']);
 const RUNTIME_LANGUAGE_ALLOWLIST = new Set([
   'java',
@@ -246,6 +252,14 @@ function dedupeBySkillKey(items: string[]): string[] {
     out.push(normalized);
   }
   return out;
+}
+
+function isSoftOrGenericSkill(skill: string): boolean {
+  const normalized = normalizeCaseToken(skill);
+  if (SOFT_OR_GENERIC_SKILLS.has(normalized)) return true;
+  return /\b(communication|leadership|problem solving|collaboration|teamwork|ownership|stakeholder)\b/i.test(
+    skill,
+  );
 }
 
 function normalizeCaseToken(text: string): string {
@@ -606,7 +620,31 @@ export function normalizeAndMap(
   const mustSeed = hasExplicitJdSections
     ? [...jdMustSignals, ...extractedMust, ...jdSignalSkills]
     : [...extractedMust, ...jdSignalSkills];
-  const mustHaves = capStrings(dedupeBySkillKey(mustSeed), 8);
+  const preliminaryMust = capStrings(dedupeBySkillKey(mustSeed), 8);
+  const hardMust = preliminaryMust.filter((skill) => !isSoftOrGenericSkill(skill));
+  const softMust = preliminaryMust.filter((skill) => isSoftOrGenericSkill(skill));
+  const hardPool = dedupeBySkillKey([
+    ...hardMust,
+    ...normalizeSkills(extraction.tech_stack || [], { jdText: opts.jdText, strict: true }),
+    ...jdMustSignals,
+    ...jdSignalSkills,
+  ]).filter((skill) => !isSoftOrGenericSkill(skill));
+  const mustRebalanced: string[] = [];
+  for (const skill of hardPool) {
+    if (mustRebalanced.includes(skill)) continue;
+    mustRebalanced.push(skill);
+    if (mustRebalanced.length >= 8) break;
+  }
+  const hardTarget = Math.min(5, preliminaryMust.length);
+  const maxSoft = mustRebalanced.length >= hardTarget ? 1 : Math.max(2, 8 - mustRebalanced.length);
+  for (const skill of softMust) {
+    if (mustRebalanced.includes(skill)) continue;
+    const currentSoft = mustRebalanced.filter((item) => isSoftOrGenericSkill(item)).length;
+    if (currentSoft >= maxSoft) break;
+    mustRebalanced.push(skill);
+    if (mustRebalanced.length >= 8) break;
+  }
+  const mustHaves = capStrings(dedupeBySkillKey(mustRebalanced), 8);
   if (mustHaves.length < 1) {
     missing.add('must_haves');
     warnings.push('Must-haves could not be extracted from JD.');
