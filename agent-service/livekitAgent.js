@@ -874,6 +874,7 @@ async function createAgentSession(
   });
 
   let audioPump = null;
+  let controlStateInterval = null;
 
   const llmService = new LLMService({
     apiKey: process.env.OPENAI_API_KEY,
@@ -1988,7 +1989,7 @@ async function createAgentSession(
     console.log(`[agent][${roomName}] AGENT_MEDIA_MODE=direct; waiting for client direct media session`);
   }
   await publishPauseState();
-  const controlStateInterval = setInterval(() => {
+  controlStateInterval = setInterval(() => {
     void publishPauseState();
   }, 700);
 
@@ -2024,10 +2025,13 @@ async function createAgentSession(
     });
   }
 
-  const stop = async (reason = 'manual') => {
+  async function stop(reason = 'manual') {
     if (stopped || stopping) return;
     stopping = true;
-    clearInterval(controlStateInterval);
+    if (controlStateInterval) {
+      clearInterval(controlStateInterval);
+      controlStateInterval = null;
+    }
     console.log(`[agent] stopping room '${roomName}' (${reason})`);
 
     if (idleTimer) {
@@ -2082,9 +2086,9 @@ async function createAgentSession(
     stopped = true;
     stopping = false;
     if (onStop) onStop(roomName);
-  };
+  }
 
-  const scheduleIdleStop = () => {
+  function scheduleIdleStop() {
     if (stopping || stopped || ROOM_IDLE_TIMEOUT_MS <= 0) return;
     if (room.remoteParticipants.size > 0) return;
     if (idleTimer) clearTimeout(idleTimer);
@@ -2093,7 +2097,7 @@ async function createAgentSession(
         console.error(`[agent][${roomName}] idle stop failed:`, err);
       });
     }, ROOM_IDLE_TIMEOUT_MS);
-  };
+  }
 
   scheduleIdleStop();
 
