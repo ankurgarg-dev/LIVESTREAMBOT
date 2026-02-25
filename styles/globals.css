@@ -505,106 +505,6 @@ h2 a {
   }
 }
 
-.bc-agent-orb-badge {
-  position: absolute;
-  top: 0.6rem;
-  right: 0.6rem;
-  z-index: 2;
-  padding: 0.2rem 0.45rem;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 168, 61, 0.56);
-  background: rgba(38, 18, 10, 0.84);
-  color: #ffd49e;
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-}
-
-.bc-rtx-inline-status {
-  position: absolute;
-  left: 0.6rem;
-  right: 0.6rem;
-  bottom: 0.6rem;
-  z-index: 7;
-  display: flex;
-  gap: 0.45rem;
-  pointer-events: none;
-}
-
-.bc-rtx-status-pill {
-  flex: 1 1 0;
-  min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.36rem;
-  padding: 0.32rem 0.5rem;
-  border-radius: 999px;
-  border: 1px solid rgba(113, 173, 193, 0.46);
-  background: rgba(7, 16, 26, 0.74);
-  color: #e8f4ff;
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.05) inset,
-    0 10px 20px rgba(0, 0, 0, 0.22);
-  font-size: 0.68rem;
-  font-weight: 650;
-  line-height: 1;
-}
-
-.bc-rtx-status-role {
-  color: rgba(186, 213, 232, 0.92);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-}
-
-.bc-rtx-status-value {
-  color: #f3fbff;
-  white-space: nowrap;
-}
-
-.bc-rtx-status-value--short {
-  display: none;
-}
-
-.bc-rtx-status-pill.is-listening {
-  border-color: rgba(109, 181, 204, 0.52);
-  background: rgba(11, 26, 39, 0.76);
-}
-
-.bc-rtx-status-pill.is-speaking {
-  border-color: rgba(75, 201, 132, 0.62);
-  background: rgba(10, 30, 22, 0.78);
-  box-shadow:
-    0 0 0 1px rgba(75, 201, 132, 0.14) inset,
-    0 0 18px rgba(75, 201, 132, 0.2);
-  animation: bc-rtx-status-speak 1s ease-in-out infinite;
-}
-
-.bc-rtx-status-pill.is-thinking {
-  border-color: rgba(33, 166, 189, 0.62);
-  background: rgba(8, 28, 36, 0.78);
-}
-
-.bc-rtx-status-pill.is-silent {
-  border-color: rgba(120, 138, 160, 0.42);
-  background: rgba(12, 20, 29, 0.76);
-  color: #c8d5e2;
-}
-
-.bc-rtx-status-pill.is-reconnecting {
-  border-color: rgba(242, 198, 108, 0.58);
-  background: rgba(42, 31, 12, 0.8);
-  color: #ffe7b1;
-  animation: bc-rtx-status-reconnect 1.6s linear infinite;
-}
-
-.bc-rtx-status-pill.is-paused {
-  border-color: rgba(147, 166, 191, 0.48);
-  background: rgba(18, 25, 34, 0.8);
-  color: #cad9e8;
-}
-
 .bc-agent-orb-canvas {
   width: 100%;
   height: 100%;
@@ -1234,32 +1134,6 @@ h2 a {
   }
 }
 
-@keyframes bc-rtx-status-speak {
-  0%,
-  100% {
-    box-shadow:
-      0 0 0 1px rgba(75, 201, 132, 0.14) inset,
-      0 0 14px rgba(75, 201, 132, 0.18);
-  }
-  50% {
-    box-shadow:
-      0 0 0 1px rgba(75, 201, 132, 0.2) inset,
-      0 0 22px rgba(75, 201, 132, 0.3);
-  }
-}
-
-@keyframes bc-rtx-status-reconnect {
-  0% {
-    opacity: 0.84;
-  }
-  50% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0.84;
-  }
-}
-
 .bc-agent-floating-shell {
   position: absolute;
   right: 1rem;
@@ -1301,29 +1175,9 @@ h2 a {
     right: 0.65rem;
     bottom: 8.8rem;
   }
-
-  .bc-rtx-inline-status {
-    gap: 0.34rem;
-    left: 0.45rem;
-    right: 0.45rem;
-    bottom: 0.45rem;
-  }
-
-  .bc-rtx-status-pill {
-    padding: 0.28rem 0.42rem;
-    font-size: 0.62rem;
-  }
-
-  .bc-rtx-status-value--long {
-    display: none;
-  }
-
-  .bc-rtx-status-value--short {
-    display: inline;
-  }
 }
 
-.bc-rtx-liquid-orb {
+.bc-eleven-orb-shell {
   position: relative;
   width: 100%;
   height: 100%;
@@ -1332,145 +1186,29 @@ h2 a {
   overflow: hidden;
   z-index: 6;
   isolation: isolate;
-  background: #000;
-  outline: 1px solid rgba(0, 0, 0, 0.98);
+  background: #05080d;
+  border: 1px solid rgba(0, 0, 0, 0.9);
   box-shadow:
-    inset 0 0 52px rgba(0, 0, 0, 0.32),
-    0 16px 38px rgba(0, 0, 0, 0.4);
+    inset 0 0 30px rgba(0, 0, 0, 0.4),
+    0 14px 34px rgba(0, 0, 0, 0.35);
 }
 
-.bc-rtx-liquid-vignette {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  pointer-events: none;
-  background:
-    radial-gradient(circle at 50% 40%, rgba(25, 33, 35, 0) 42%, rgba(25, 33, 35, 0.56) 100%),
-    radial-gradient(circle at 50% 100%, rgba(0, 0, 0, 0.3), rgba(0, 0, 0, 0));
+.bc-eleven-orb-shell.is-paused {
+  filter: saturate(0.74) brightness(0.82);
 }
 
-.bc-rtx-liquid-stage {
+.bc-eleven-orb-surface {
   position: absolute;
-  left: 3.5%;
-  right: 3.5%;
-  top: 12%;
-  bottom: 9%;
-  border-radius: 18px;
+  inset: 5%;
+  border-radius: 12px;
   overflow: hidden;
-  display: block;
-  z-index: 2;
-  box-shadow:
-    inset 0 0 22px rgba(0, 0, 0, 0.45),
-    0 12px 28px rgba(0, 0, 0, 0.3);
+  background:
+    radial-gradient(circle at 30% 25%, rgba(130, 170, 255, 0.18), transparent 40%),
+    radial-gradient(circle at 72% 72%, rgba(151, 239, 255, 0.14), transparent 48%),
+    #060b12;
 }
 
-.bc-rtx-liquid-canvas {
-  width: min(86%, 396px);
-  aspect-ratio: 1 / 1;
-  display: block;
-}
-
-.bc-shader-surface {
-  position: absolute;
-  inset: 0;
-}
-
-.bc-shader-surface canvas {
-  width: 100% !important;
-  height: 100% !important;
-  transition:
-    filter 300ms ease,
-    transform 300ms ease,
-    opacity 300ms ease;
-  transform-origin: 50% 50%;
-}
-
-.bc-rtx-liquid-orb[data-ai-state='listening'] .bc-shader-surface canvas {
-  filter: saturate(1.05) brightness(1.02) contrast(1.03);
-  animation: bc-rtx-shader-listen 3.2s ease-in-out infinite;
-}
-
-.bc-rtx-liquid-orb[data-ai-state='thinking'] .bc-shader-surface canvas {
-  filter: hue-rotate(12deg) saturate(1.1) brightness(1.03);
-  animation: bc-rtx-shader-think 1.8s ease-in-out infinite;
-}
-
-.bc-rtx-liquid-orb[data-ai-state='speaking'] .bc-shader-surface canvas {
-  filter: hue-rotate(-12deg) saturate(1.32) brightness(1.14) contrast(1.12);
-  animation: bc-rtx-shader-speak 0.72s ease-in-out infinite;
-}
-
-.bc-rtx-liquid-orb[data-ai-state='silent'] .bc-shader-surface canvas {
-  filter: saturate(0.72) brightness(0.76) contrast(0.92);
-  animation: none;
-}
-
-.bc-rtx-liquid-orb[data-ai-state='reconnecting'] .bc-shader-surface canvas {
-  filter: saturate(0.88) brightness(0.86);
-  animation: bc-rtx-shader-reconnect 1.2s linear infinite;
-}
-
-.bc-rtx-liquid-noise {
-  position: absolute;
-  inset: 0;
-  z-index: 3;
-  pointer-events: none;
-  mix-blend-mode: soft-light;
-  opacity: 0.018;
-  background-image:
-    radial-gradient(circle at 16% 12%, rgba(255, 255, 255, 0.46) 0.4px, transparent 0.9px),
-    radial-gradient(circle at 73% 29%, rgba(255, 255, 255, 0.42) 0.45px, transparent 1px),
-    radial-gradient(circle at 32% 70%, rgba(255, 255, 255, 0.34) 0.35px, transparent 0.85px),
-    radial-gradient(circle at 81% 79%, rgba(255, 255, 255, 0.38) 0.4px, transparent 1px);
-  background-size: 74px 74px, 69px 69px, 58px 58px, 61px 61px;
-}
-
-.bc-rtx-liquid-orb[data-ai-state='paused'] .bc-shader-surface canvas,
-.bc-rtx-liquid-orb.is-paused .bc-shader-surface canvas {
-  filter: saturate(0.64) brightness(0.74);
-  animation: none;
-}
-
-@keyframes bc-rtx-shader-listen {
-  0%,
-  100% {
-    transform: scale(1);
-    opacity: 0.96;
-  }
-  50% {
-    transform: scale(1.015);
-    opacity: 1;
-  }
-}
-
-@keyframes bc-rtx-shader-think {
-  0%,
-  100% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.024);
-  }
-}
-
-@keyframes bc-rtx-shader-speak {
-  0%,
-  100% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.038);
-  }
-}
-
-@keyframes bc-rtx-shader-reconnect {
-  0% {
-    opacity: 0.8;
-  }
-  50% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0.8;
-  }
+.bc-eleven-orb-canvas {
+  width: 100%;
+  height: 100%;
 }

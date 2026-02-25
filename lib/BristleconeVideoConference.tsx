@@ -38,8 +38,7 @@ import { WaveformVisualizer } from '@/visualizer/WaveformVisualizer';
 import { ParticleHaloVisualizer } from '@/visualizer/ParticleHaloVisualizer';
 import { EqualizerVisualizer } from '@/visualizer/EqualizerVisualizer';
 import type { VisualizerState } from '@/visualizer/VoiceVisualizer';
-import { LiquidGlassOrb } from '@/lib/realtime/LiquidGlassOrb';
-import { ShaderAnimation } from '@/components/ui/shader-lines';
+import { Orb } from '@/components/ui/orb';
 const RECORDING_ENDPOINT = process.env.NEXT_PUBLIC_LK_RECORD_ENDPOINT ?? '/api/record';
 
 export interface BristleconeVideoConferenceProps extends React.HTMLAttributes<HTMLDivElement> {
@@ -242,8 +241,6 @@ function AgentOrbOverlay({
   agentAssistantState?: AgentAssistantState;
 }) {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
-  const liquidCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
-  const liquidEngineRef = React.useRef<LiquidGlassOrb | null>(null);
   const managerRef = React.useRef<VisualizerManager | null>(null);
   const audioContextRef = React.useRef<AudioContext | null>(null);
   const mixRef = React.useRef<GainNode | null>(null);
@@ -285,8 +282,6 @@ function AgentOrbOverlay({
   React.useEffect(() => {
     if (variant === 'realtime_screening') {
       return () => {
-        liquidEngineRef.current?.stop();
-        liquidEngineRef.current = null;
         if (thinkingTimeoutRef.current) {
           clearTimeout(thinkingTimeoutRef.current);
           thinkingTimeoutRef.current = null;
@@ -336,38 +331,6 @@ function AgentOrbOverlay({
       connectionSignatureRef.current = null;
     };
   }, [variant]);
-
-  React.useEffect(() => {
-    if (variant !== 'realtime_screening') return;
-    if (!liquidCanvasRef.current) return;
-
-    const engine = new LiquidGlassOrb(liquidCanvasRef.current);
-    liquidEngineRef.current = engine;
-    engine.start();
-    const ro = new ResizeObserver(() => {
-      engine.resize();
-    });
-    ro.observe(liquidCanvasRef.current);
-
-    return () => {
-      ro.disconnect();
-      engine.stop();
-      if (liquidEngineRef.current === engine) liquidEngineRef.current = null;
-    };
-  }, [variant]);
-
-  React.useEffect(() => {
-    if (variant !== 'realtime_screening') return;
-    liquidEngineRef.current?.setState(realtimeState, realtimeState === 'interrupted' ? 220 : 420);
-  }, [realtimeState, variant]);
-
-  React.useEffect(() => {
-    if (variant !== 'realtime_screening') return;
-    const listeningLevel = localIsSpeaking ? localAudioLevel : localAudioLevel * 0.2;
-    const ttsLevel = isSpeaking ? remoteAudioLevel : remoteAudioLevel * 0.15;
-    liquidEngineRef.current?.setAudioLevel(listeningLevel);
-    liquidEngineRef.current?.setTtsLevel(ttsLevel);
-  }, [isSpeaking, localIsSpeaking, remoteAudioLevel, localAudioLevel, variant]);
 
   React.useEffect(() => {
     if (variant === 'realtime_screening') return;
@@ -536,73 +499,30 @@ function AgentOrbOverlay({
   }, [agentAssistantState, agentTransportMode, interruptedActive, isSpeaking, localIsSpeaking, micUnavailable, paused, processingActive, variant]);
 
   if (variant === 'realtime_screening') {
-    const userState = localIsSpeaking ? 'speaking' : 'listening';
-    const userStateLongLabel = localIsSpeaking ? 'Speaking' : 'Listening';
-    const userStateShortLabel = localIsSpeaking ? 'Speak' : 'Listen';
-
-    let aiState: 'speaking' | 'thinking' | 'listening' | 'silent' | 'reconnecting' | 'paused' = 'listening';
-    if (realtimeState === 'paused') {
-      aiState = 'paused';
-    } else if (realtimeState === 'reconnecting' || agentTransportMode === 'unknown') {
-      aiState = 'reconnecting';
-    } else if (agentAssistantState === 'speaking' || isSpeaking || realtimeState === 'speaking') {
-      aiState = 'speaking';
-    } else if (realtimeState === 'processing' || agentAssistantState === 'thinking') {
-      aiState = 'thinking';
-    } else if (realtimeState === 'idle' && !localIsSpeaking) {
-      aiState = 'silent';
-    }
-
-    const aiStateLongLabel =
-      aiState === 'speaking'
-        ? 'Speaking'
-        : aiState === 'thinking'
-          ? 'Thinking'
-          : aiState === 'silent'
-            ? 'Silent'
-          : aiState === 'reconnecting'
-            ? 'Reconnecting'
-            : aiState === 'paused'
-              ? 'Paused'
-              : 'Listening';
-    const aiStateShortLabel =
-      aiState === 'speaking'
-        ? 'Speak'
-        : aiState === 'thinking'
-          ? 'Think'
-          : aiState === 'silent'
-            ? 'Silent'
-          : aiState === 'reconnecting'
-            ? 'Reconnect'
-            : aiState === 'paused'
-              ? 'Paused'
-              : 'Listen';
+    const orbAgentState: 'thinking' | 'listening' | 'talking' | null =
+      realtimeState === 'speaking'
+        ? 'talking'
+        : realtimeState === 'listening'
+          ? 'listening'
+          : realtimeState === 'processing' || realtimeState === 'interrupted' || realtimeState === 'reconnecting'
+            ? 'thinking'
+            : null;
 
     return (
       <div
-        className={`bc-rtx-liquid-orb ${paused ? 'is-paused' : ''}`}
+        className={`bc-eleven-orb-shell ${paused ? 'is-paused' : ''}`}
         data-state={realtimeState}
-        data-ai-state={aiState}
-        aria-label="Realtime screening orb"
+        aria-label="Realtime agent orb"
       >
-        <div className="bc-rtx-liquid-stage">
-          <ShaderAnimation className="bc-shader-surface" />
+        <div className="bc-eleven-orb-surface">
+          <Orb
+            className="bc-eleven-orb-canvas"
+            agentState={orbAgentState}
+            volumeMode="manual"
+            manualInput={localAudioLevel}
+            manualOutput={remoteAudioLevel}
+          />
         </div>
-        <div className="bc-agent-orb-badge">Realtime Screening</div>
-        <div className="bc-rtx-inline-status" aria-live="polite">
-          <div className={`bc-rtx-status-pill is-${userState}`} aria-label={`You: ${userStateLongLabel}`}>
-            <span className="bc-rtx-status-role">You</span>
-            <span className="bc-rtx-status-value bc-rtx-status-value--long">{userStateLongLabel}</span>
-            <span className="bc-rtx-status-value bc-rtx-status-value--short">{userStateShortLabel}</span>
-          </div>
-          <div className={`bc-rtx-status-pill is-${aiState}`} aria-label={`AI: ${aiStateLongLabel}`}>
-            <span className="bc-rtx-status-role">AI</span>
-            <span className="bc-rtx-status-value bc-rtx-status-value--long">{aiStateLongLabel}</span>
-            <span className="bc-rtx-status-value bc-rtx-status-value--short">{aiStateShortLabel}</span>
-          </div>
-        </div>
-        <div className="bc-rtx-liquid-vignette" />
-        <div className="bc-rtx-liquid-noise" />
       </div>
     );
   }
