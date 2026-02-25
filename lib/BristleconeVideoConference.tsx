@@ -52,6 +52,28 @@ type AgentTransportMode = 'realtime_ws' | 'direct_client' | 'turn_based' | 'unkn
 type AgentMediaMode = 'direct' | 'relay' | 'unknown';
 type AgentAssistantState = 'idle' | 'thinking' | 'speaking' | 'unknown';
 
+function isRoomDebugEnabled(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('debugRoom') === '1' || params.get('debug') === 'room') return true;
+    if (window.localStorage.getItem('bc_debug_room') === '1') return true;
+  } catch {
+    // Ignore URL/localStorage access failures.
+  }
+  return false;
+}
+
+function roomDebugLog(enabled: boolean, event: string, payload?: unknown) {
+  if (!enabled) return;
+  const ts = new Date().toISOString();
+  if (payload === undefined) {
+    console.info(`[bc-room-debug] ${ts} ${event}`);
+    return;
+  }
+  console.info(`[bc-room-debug] ${ts} ${event}`, payload);
+}
+
 function formatDuration(totalSeconds: number): string {
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -732,6 +754,15 @@ export function BristleconeVideoConference({
   const [agentMediaModeEffective, setAgentMediaModeEffective] = React.useState<AgentMediaMode>('unknown');
   const [agentMediaModeConfigured, setAgentMediaModeConfigured] = React.useState<AgentMediaMode>('unknown');
   const [stickyRealtimeUi, setStickyRealtimeUi] = React.useState(false);
+  const [roomDebugEnabled, setRoomDebugEnabled] = React.useState(false);
+
+  React.useEffect(() => {
+    const enabled = isRoomDebugEnabled();
+    setRoomDebugEnabled(enabled);
+    if (enabled) {
+      roomDebugLog(true, 'debug-enabled', { room: room.name || '(unknown)' });
+    }
+  }, [room.name]);
 
   React.useEffect(() => {
     const onDataReceived = (payload: Uint8Array) => {
@@ -739,6 +770,13 @@ export function BristleconeVideoConference({
         const text = new TextDecoder().decode(payload).trim();
         if (!text.startsWith('{')) return;
         const parsed = JSON.parse(text);
+        roomDebugLog(roomDebugEnabled, 'data-received', {
+          type: parsed?.type || 'unknown',
+          transportMode: parsed?.transportMode || undefined,
+          mediaModeEffective: parsed?.mediaModeEffective || undefined,
+          assistantState: parsed?.assistantState || undefined,
+          paused: parsed?.paused,
+        });
         if (parsed?.type === 'agent_control_state') {
           setIsInterviewPaused(Boolean(parsed?.paused));
           const mode = String(parsed?.transportMode || '').trim();
@@ -779,13 +817,81 @@ export function BristleconeVideoConference({
     return () => {
       room.off(RoomEvent.DataReceived, onDataReceived);
     };
-  }, [room]);
+  }, [room, roomDebugEnabled]);
+
+  React.useEffect(() => {
+    const onConnected = () => roomDebugLog(roomDebugEnabled, 'room-connected', { room: room.name });
+    const onReconnecting = () => roomDebugLog(roomDebugEnabled, 'room-reconnecting');
+    const onReconnected = () => roomDebugLog(roomDebugEnabled, 'room-reconnected');
+    const onDisconnected = () => roomDebugLog(roomDebugEnabled, 'room-disconnected');
+    const onParticipantConnected = (participant: Participant) =>
+      roomDebugLog(roomDebugEnabled, 'participant-connected', {
+        identity: participant.identity,
+        name: participant.name || '',
+        kind: participant.kind || '',
+        isAgentLike: isAgentParticipant(participant),
+      });
+    const onParticipantDisconnected = (participant: Participant) =>
+      roomDebugLog(roomDebugEnabled, 'participant-disconnected', {
+        identity: participant.identity,
+        name: participant.name || '',
+        kind: participant.kind || '',
+        isAgentLike: isAgentParticipant(participant),
+      });
+    room.on(RoomEvent.Connected, onConnected);
+    room.on(RoomEvent.Reconnecting, onReconnecting);
+    room.on(RoomEvent.Reconnected, onReconnected);
+    room.on(RoomEvent.Disconnected, onDisconnected);
+    room.on(RoomEvent.ParticipantConnected, onParticipantConnected);
+    room.on(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
+    return () => {
+      room.off(RoomEvent.Connected, onConnected);
+      room.off(RoomEvent.Reconnecting, onReconnecting);
+      room.off(RoomEvent.Reconnected, onReconnected);
+      room.off(RoomEvent.Disconnected, onDisconnected);
+      room.off(RoomEvent.ParticipantConnected, onParticipantConnected);
+      room.off(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
+    };
+  }, [room, roomDebugEnabled]);
 
   React.useEffect(() => {
     if (agentTransportMode === 'direct_client' || agentTransportMode === 'realtime_ws') {
       setStickyRealtimeUi(true);
     }
   }, [agentTransportMode]);
+
+  const trackSnapshot = React.useMemo(
+    () =>
+      tracks.map((track) => ({
+        participant: track?.participant?.identity || '',
+        source: String(track?.source || ''),
+        placeholder: !isTrackReference(track),
+        isAgentLike: isAgentParticipant(track?.participant),
+      })),
+    [tracks],
+  );
+
+  React.useEffect(() => {
+    roomDebugLog(roomDebugEnabled, 'state-snapshot', {
+      trackCount: trackSnapshot.length,
+      trackSnapshot,
+      trackedParticipantCount: trackedParticipantIdentities.size,
+      stickyRealtimeUi,
+      isInterviewPaused,
+      agentTransportMode,
+      agentMediaModeEffective,
+      agentAssistantState,
+    });
+  }, [
+    roomDebugEnabled,
+    trackSnapshot,
+    trackedParticipantIdentities,
+    stickyRealtimeUi,
+    isInterviewPaused,
+    agentTransportMode,
+    agentMediaModeEffective,
+    agentAssistantState,
+  ]);
 
   const togglePause = React.useCallback(async () => {
     if (!isModerator) return;
