@@ -8,7 +8,7 @@ declare global {
   }
 }
 
-export function ShaderAnimation() {
+export function ShaderAnimation({ className = "" }: { className?: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<{
     camera: any;
@@ -156,6 +156,5 @@ export function ShaderAnimation() {
     return onWindowResize;
   };
 
-  return <div ref={containerRef} className="absolute h-full w-full" />;
+  return <div ref={containerRef} className={["absolute inset-0 h-full w-full", className].filter(Boolean).join(" ")} />;
 }
-

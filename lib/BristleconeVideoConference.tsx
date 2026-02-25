@@ -542,10 +542,11 @@ function AgentOrbOverlay({
         data-state={realtimeState}
         aria-label="Realtime screening orb"
       >
-        <ShaderAnimation />
+        <div className="bc-rtx-liquid-stage">
+          <ShaderAnimation className="bc-shader-surface" />
+        </div>
         <div className="bc-agent-orb-badge">Realtime Screening</div>
         <div className="bc-rtx-liquid-vignette" />
-        <div className="bc-rtx-liquid-stage" />
         <div className="bc-rtx-liquid-noise" />
       </div>
     );
