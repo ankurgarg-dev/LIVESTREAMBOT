@@ -2,6 +2,7 @@ import { computeCvJdDetailedScorecard, computeCvJdScorecard } from '@/lib/server
 import { canonicalizeSkillList } from '@/lib/server/skillCanonicalization';
 import { buildRoleContextFromPosition } from '@/lib/server/cvContext';
 import { generateAiScreening, type AiScreeningResult } from '@/lib/server/aiScreening';
+import { createInterview, getLatestInterviewByRoom, type InterviewPositionSnapshot } from '@/lib/server/interviewStore';
 import {
   createCandidateApplication,
   getCandidate,
@@ -209,6 +210,41 @@ export async function POST(req: NextRequest) {
       blendedScore: stored.blendedScore,
       blendedRecommendation: stored.blendedRecommendation,
     });
+    const existingInterview = await getLatestInterviewByRoom(String(created.roomName || '').trim());
+    if (!existingInterview) {
+      const positionSnapshotForInterview: InterviewPositionSnapshot = {
+        role_title: position.role_title,
+        level: position.level,
+        duration_minutes: position.duration_minutes,
+        must_haves: positionSnapshot.must_haves,
+        nice_to_haves: positionSnapshot.nice_to_haves,
+        tech_stack: positionSnapshot.tech_stack,
+        focus_areas: position.focus_areas,
+        deep_dive_mode: position.deep_dive_mode,
+        strictness: position.strictness,
+        evaluation_policy: position.evaluation_policy,
+        notes_for_interviewer: position.notes_for_interviewer,
+      };
+      await createInterview({
+        roomName: String(created.roomName || '').trim() || `application-${created.id.slice(0, 8)}`,
+        candidateName: created.candidateName || 'Candidate',
+        candidateEmail: created.candidateEmail || 'unknown@example.com',
+        interviewerName: 'Interviewer Bot',
+        interviewerEmail: '',
+        jobTitle: position.role_title || created.positionId,
+        jobDepartment: '',
+        scheduledAt: new Date().toISOString(),
+        durationMinutes: Number(position.duration_minutes || 30),
+        timezone: 'UTC',
+        notes: 'Auto-created when application was created',
+        agentType: created.interviewAgentType === 'realtime_screening' ? 'realtime_screening' : 'classic',
+        candidateContext: created.candidateContext || '',
+        roleContext: created.roleContext || '',
+        positionId: created.positionId || undefined,
+        positionSnapshot: positionSnapshotForInterview,
+        cvJdScorecard: created.cvJdScorecard,
+      });
+    }
     return NextResponse.json({ ok: true, candidate: created }, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to process application action';

@@ -7,6 +7,7 @@ import {
   upsertCandidate,
 } from '@/lib/server/candidateStore';
 import { extractCandidateProfileFromUpload, buildRoleContextFromPosition } from '@/lib/server/cvContext';
+import { createInterview, getLatestInterviewByRoom, type InterviewPositionSnapshot } from '@/lib/server/interviewStore';
 import { getPosition } from '@/lib/server/positionStore';
 import { canonicalizeSkillList } from '@/lib/server/skillCanonicalization';
 import { NextRequest, NextResponse } from 'next/server';
@@ -199,6 +200,41 @@ export async function POST(req: NextRequest) {
         conclusion,
       });
       row = await attachCandidateCv(row.id, cvFile);
+      const existingInterview = await getLatestInterviewByRoom(String(row.roomName || '').trim());
+      if (!existingInterview) {
+        const positionSnapshotForInterview: InterviewPositionSnapshot = {
+          role_title: position.role_title,
+          level: position.level,
+          duration_minutes: position.duration_minutes,
+          must_haves: positionSnapshot.must_haves,
+          nice_to_haves: positionSnapshot.nice_to_haves,
+          tech_stack: positionSnapshot.tech_stack,
+          focus_areas: position.focus_areas,
+          deep_dive_mode: position.deep_dive_mode,
+          strictness: position.strictness,
+          evaluation_policy: position.evaluation_policy,
+          notes_for_interviewer: position.notes_for_interviewer,
+        };
+        await createInterview({
+          roomName: String(row.roomName || '').trim() || `application-${row.id.slice(0, 8)}`,
+          candidateName: row.candidateName || 'Candidate',
+          candidateEmail: row.candidateEmail || 'unknown@example.com',
+          interviewerName: 'Interviewer Bot',
+          interviewerEmail: '',
+          jobTitle: position.role_title || row.positionId,
+          jobDepartment: '',
+          scheduledAt: new Date().toISOString(),
+          durationMinutes: Number(position.duration_minutes || 30),
+          timezone: 'UTC',
+          notes: 'Auto-created when application was created',
+          agentType: row.interviewAgentType === 'realtime_screening' ? 'realtime_screening' : 'classic',
+          candidateContext: row.candidateContext || '',
+          roleContext: row.roleContext || '',
+          positionId: row.positionId || undefined,
+          positionSnapshot: positionSnapshotForInterview,
+          cvJdScorecard: row.cvJdScorecard,
+        });
+      }
       created.push(row);
     }
 

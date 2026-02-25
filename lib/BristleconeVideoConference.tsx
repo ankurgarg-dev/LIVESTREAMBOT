@@ -603,11 +603,13 @@ function FloatingAgentOrb({
   paused = false,
   agentTransportMode = 'unknown',
   agentAssistantState = 'unknown',
+  keepVisible = false,
 }: {
   trackedParticipantIdentities: Set<string>;
   paused?: boolean;
   agentTransportMode?: AgentTransportMode;
   agentAssistantState?: AgentAssistantState;
+  keepVisible?: boolean;
 }) {
   const { localParticipant } = useLocalParticipant();
   const remoteParticipants = useRemoteParticipants({
@@ -634,7 +636,7 @@ function FloatingAgentOrb({
 
   if (!fallbackAgent) {
     const shouldShowDirectFallback =
-      agentTransportMode === 'direct_client' || agentTransportMode === 'realtime_ws';
+      keepVisible || agentTransportMode === 'direct_client' || agentTransportMode === 'realtime_ws';
     if (!shouldShowDirectFallback) return null;
 
     const syntheticState = paused
@@ -729,6 +731,7 @@ export function BristleconeVideoConference({
   const [agentFullDuplex, setAgentFullDuplex] = React.useState(false);
   const [agentMediaModeEffective, setAgentMediaModeEffective] = React.useState<AgentMediaMode>('unknown');
   const [agentMediaModeConfigured, setAgentMediaModeConfigured] = React.useState<AgentMediaMode>('unknown');
+  const [stickyRealtimeUi, setStickyRealtimeUi] = React.useState(false);
 
   React.useEffect(() => {
     const onDataReceived = (payload: Uint8Array) => {
@@ -777,6 +780,12 @@ export function BristleconeVideoConference({
       room.off(RoomEvent.DataReceived, onDataReceived);
     };
   }, [room]);
+
+  React.useEffect(() => {
+    if (agentTransportMode === 'direct_client' || agentTransportMode === 'realtime_ws') {
+      setStickyRealtimeUi(true);
+    }
+  }, [agentTransportMode]);
 
   const togglePause = React.useCallback(async () => {
     if (!isModerator) return;
@@ -899,6 +908,7 @@ export function BristleconeVideoConference({
             paused={isInterviewPaused}
             agentTransportMode={agentTransportMode}
             agentAssistantState={agentAssistantState}
+            keepVisible={stickyRealtimeUi}
           />
         </div>
 
