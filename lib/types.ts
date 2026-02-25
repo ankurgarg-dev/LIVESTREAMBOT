@@ -30,5 +30,11 @@ export type ConnectionDetails = {
     agentType?: 'classic' | 'realtime_screening';
     candidateContext?: string;
     roleContext?: string;
+    mustHaveSkills?: string[];
+    requiredTechStack?: string[];
+    goodToHaveSkills?: string[];
+    currentQuestion?: string;
+    currentSkill?: string;
+    currentTopic?: string;
   };
 };

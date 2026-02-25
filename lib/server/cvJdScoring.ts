@@ -65,29 +65,87 @@ const STOP_WORDS = new Set([
   'have',
 ]);
 
+const SKILL_SYNONYMS: Record<string, string[]> = {
+  'java j2ee': ['java', 'j2ee', 'jee'],
+  'object oriented design': ['ood', 'oop', 'object oriented', 'solid principles'],
+  'rest apis': ['rest api', 'restful api', 'restful apis', 'web services'],
+  nosql: ['mongodb', 'redis', 'dynamodb', 'cassandra', 'document database'],
+  kafka: ['apache kafka', 'message queue', 'mq'],
+  'automation testing': ['test automation', 'automation framework'],
+  'unit testing': ['unit test', 'junit', 'rspec', 'minitest'],
+  'integration testing': ['integration test'],
+  'ci cd': ['continuous integration', 'continuous delivery', 'continuous deployment', 'pipeline', 'pipelines'],
+  'infrastructure as code': ['iac', 'terraform', 'cloudformation', 'pulumi'],
+  agile: ['scrum', 'kanban', 'agile methodology'],
+  microservices: ['micro services', 'micro-service', 'microservice'],
+};
+
 function clean(input: string): string {
   return String(input || '').trim().replace(/\s+/g, ' ');
 }
 
 function norm(input: string): string {
-  return clean(input).toLowerCase();
+  return clean(input)
+    .toLowerCase()
+    .replace(/[‐‑‒–—−]/g, '-')
+    .replace(/&/g, ' and ')
+    .replace(/[()[\]{}.,;:!?"'`~]/g, ' ')
+    .replace(/[\\|]/g, ' ')
+    .replace(/[_]+/g, ' ')
+    .replace(/\//g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function stemToken(token: string): string {
+  if (token.length <= 3) return token;
+  if (token.endsWith('ies') && token.length > 4) return `${token.slice(0, -3)}y`;
+  if (token.endsWith('ing') && token.length > 5) return token.slice(0, -3);
+  if (token.endsWith('ed') && token.length > 4) return token.slice(0, -2);
+  if (token.endsWith('es') && token.length > 4) return token.slice(0, -2);
+  if (token.endsWith('s') && token.length > 4) return token.slice(0, -1);
+  return token;
 }
 
 function tokenize(input: string): string[] {
   const words = norm(input).split(/[^a-z0-9+#./-]+/g);
-  return Array.from(new Set(words.filter((w) => w.length >= 2 && !STOP_WORDS.has(w))));
+  return Array.from(new Set(words.filter((w) => w.length >= 2 && !STOP_WORDS.has(w)).map(stemToken)));
+}
+
+function splitCompoundSkill(value: string): string[] {
+  const cleaned = clean(value);
+  if (!cleaned) return [];
+  if (!/[;,]/.test(cleaned) && !/\s+and\s+/i.test(cleaned)) return [cleaned];
+  const parts = cleaned
+    .split(/[;,]/g)
+    .flatMap((part) => part.split(/\s+and\s+/gi))
+    .map((part) => clean(part))
+    .filter((part) => part.length >= 3);
+  return parts.length > 1 ? parts : [cleaned];
+}
+
+function canonicalSkillKey(skill: string): string {
+  return norm(skill);
+}
+
+function candidatePhrasesFor(skill: string): string[] {
+  const key = canonicalSkillKey(skill);
+  const extras = SKILL_SYNONYMS[key] || [];
+  return dedupeSkills([skill, ...extras]);
 }
 
 function dedupeSkills(values: string[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const raw of values) {
-    const skill = clean(raw);
-    if (!skill) continue;
-    const key = skill.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(skill);
+    for (const part of splitCompoundSkill(raw)) {
+      const skill = clean(part);
+      if (!skill) continue;
+      const key = skill.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(skill);
+    }
   }
   return out;
 }
@@ -104,29 +162,48 @@ function parseSkillsFromRoleContext(roleContext: string, label: string): string[
 
 function scoreOneSkill(skill: string, cvText: string): CvJdSkillScore {
   const loweredCv = norm(cvText);
-  const loweredSkill = norm(skill);
-  const tokens = tokenize(skill);
+  const candidates = candidatePhrasesFor(skill);
+  const tokenSet = new Set(tokenize(cvText));
 
-  if (loweredSkill && loweredCv.includes(loweredSkill)) {
-    return {
-      skill,
-      category: 'common',
-      matched: true,
-      matchType: 'exact',
-      score: 100,
-      oneLiner: 'Direct mention found in the CV/profile context.',
-    };
+  for (const phrase of candidates) {
+    const loweredSkill = norm(phrase);
+    if (loweredSkill && loweredCv.includes(loweredSkill)) {
+      return {
+        skill,
+        category: 'common',
+        matched: true,
+        matchType: 'exact',
+        score: 100,
+        oneLiner:
+          phrase === skill
+            ? 'Direct mention found in the CV/profile context.'
+            : `Matched via canonical alias: ${phrase}.`,
+      };
+    }
   }
 
-  const tokenHits = tokens.filter((token) => loweredCv.includes(token));
-  const tokenCoverage = tokens.length ? tokenHits.length / tokens.length : 0;
+  const coverageCandidates = candidates
+    .map((candidate) => {
+      const tokens = tokenize(candidate);
+      const tokenHits = tokens.filter((token) => tokenSet.has(token));
+      const tokenCoverage = tokens.length ? tokenHits.length / tokens.length : 0;
+      return {
+        tokenHits,
+        tokenCoverage,
+      };
+    })
+    .sort((a, b) => b.tokenCoverage - a.tokenCoverage);
+  const bestCoverage = coverageCandidates[0] || { tokenHits: [] as string[], tokenCoverage: 0 };
+
+  const tokenCoverage = bestCoverage.tokenCoverage;
+  const tokenHits = bestCoverage.tokenHits;
   if (tokenCoverage >= 0.6 && tokenHits.length > 0) {
     return {
       skill,
       category: 'common',
       matched: true,
       matchType: 'partial',
-      score: 60,
+      score: tokenCoverage >= 0.85 ? 75 : 60,
       oneLiner: `Related evidence found: ${tokenHits.slice(0, 4).join(', ')}.`,
     };
   }
@@ -153,10 +230,16 @@ function countMatched(rows: CvJdSkillScore[]): number {
 
 export function computeCvJdScorecard(input: {
   candidateContext?: string;
+  candidateSkills?: string[];
   roleContext?: string;
   positionSnapshot?: InterviewPositionSnapshot;
 }): CvJdScorecard | undefined {
-  const candidateContext = clean(input.candidateContext || '');
+  const candidateSkills = dedupeSkills(Array.isArray(input.candidateSkills) ? input.candidateSkills : []);
+  const candidateContext = clean(
+    [input.candidateContext || '', candidateSkills.length ? `Key skills: ${candidateSkills.join(', ')}` : '']
+      .filter(Boolean)
+      .join('\n'),
+  );
   if (!candidateContext) return undefined;
 
   const positionSnapshot = input.positionSnapshot;

@@ -29,10 +29,13 @@ class BaseLivekitAgent {
     return '';
   }
 
-  buildRuntimeInstruction({ candidateContext, roleContext }) {
+  buildRuntimeInstruction({ candidateContext, roleContext, jobMetadata, interviewState, voiceStyleInstruction }) {
     return this.deps.buildInterviewRuntimeInstruction({
       candidateContext,
       roleContext,
+      jobMetadata,
+      interviewState,
+      voiceStyleInstruction,
       basePrompt: this.runtimeInstruction,
     });
   }
@@ -77,10 +80,13 @@ class RealtimeScreeningLivekitAgent extends BaseLivekitAgent {
     return process.env.OPENAI_REALTIME_SCREENING_FALLBACK_MODEL || 'gpt-4o-mini';
   }
 
-  buildRuntimeInstruction({ candidateContext, roleContext }) {
+  buildRuntimeInstruction({ candidateContext, roleContext, jobMetadata, interviewState, voiceStyleInstruction }) {
     return this.deps.buildRealtimeScreeningRuntimeInstruction({
       candidateContext,
       roleContext,
+      jobMetadata,
+      interviewState,
+      voiceStyleInstruction,
       basePrompt: this.runtimeInstruction,
     });
   }

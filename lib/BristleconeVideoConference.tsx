@@ -38,6 +38,7 @@ import { WaveformVisualizer } from '@/visualizer/WaveformVisualizer';
 import { ParticleHaloVisualizer } from '@/visualizer/ParticleHaloVisualizer';
 import { EqualizerVisualizer } from '@/visualizer/EqualizerVisualizer';
 import type { VisualizerState } from '@/visualizer/VoiceVisualizer';
+import { LiquidGlassOrb } from '@/lib/realtime/LiquidGlassOrb';
 const RECORDING_ENDPOINT = process.env.NEXT_PUBLIC_LK_RECORD_ENDPOINT ?? '/api/record';
 
 export interface BristleconeVideoConferenceProps extends React.HTMLAttributes<HTMLDivElement> {
@@ -47,7 +48,9 @@ export interface BristleconeVideoConferenceProps extends React.HTMLAttributes<HT
 }
 
 type AgentOrbVariant = 'classic' | 'realtime_screening';
-type AgentTransportMode = 'realtime_ws' | 'turn_based' | 'unknown';
+type AgentTransportMode = 'realtime_ws' | 'direct_client' | 'turn_based' | 'unknown';
+type AgentMediaMode = 'direct' | 'relay' | 'unknown';
+type AgentAssistantState = 'idle' | 'thinking' | 'speaking' | 'unknown';
 
 function formatDuration(totalSeconds: number): string {
   const hours = Math.floor(totalSeconds / 3600);
@@ -205,13 +208,19 @@ function AgentOrbOverlay({
   localParticipant,
   variant,
   paused = false,
+  agentTransportMode = 'unknown',
+  agentAssistantState = 'unknown',
 }: {
   participant: Participant;
   localParticipant?: Participant;
   variant: AgentOrbVariant;
   paused?: boolean;
+  agentTransportMode?: AgentTransportMode;
+  agentAssistantState?: AgentAssistantState;
 }) {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
+  const liquidCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
+  const liquidEngineRef = React.useRef<LiquidGlassOrb | null>(null);
   const managerRef = React.useRef<VisualizerManager | null>(null);
   const audioContextRef = React.useRef<AudioContext | null>(null);
   const mixRef = React.useRef<GainNode | null>(null);
@@ -221,16 +230,51 @@ function AgentOrbOverlay({
   const lastLocalSpeakingRef = React.useRef(false);
   const thinkingTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const [visualState, setVisualState] = React.useState<VisualizerState>('idle');
+  const interruptedTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const processingTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [interruptedActive, setInterruptedActive] = React.useState(false);
+  const [processingActive, setProcessingActive] = React.useState(false);
+  const [realtimeState, setRealtimeState] = React.useState<
+    | 'idle'
+    | 'listening'
+    | 'processing'
+    | 'speaking'
+    | 'interrupted'
+    | 'paused'
+    | 'reconnecting'
+    | 'error'
+    | 'completed'
+    | 'muted_or_no_mic'
+  >('idle');
+  const wasAgentSpeakingRef = React.useRef(false);
+  const wasLocalSpeakingRealtimeRef = React.useRef(false);
 
   const isSpeaking = useIsSpeaking(participant);
   const localIsSpeaking = useIsSpeaking(localParticipant);
+  const remoteAudioLevel = Math.max(0, Math.min(1, Number((participant as Participant & { audioLevel?: number })?.audioLevel || 0)));
+  const localAudioLevel = Math.max(
+    0,
+    Math.min(1, Number((localParticipant as Participant & { audioLevel?: number } | undefined)?.audioLevel || 0)),
+  );
+  const localMicPub = localParticipant?.getTrackPublication(Track.Source.Microphone);
+  const micUnavailable = Boolean(localParticipant) && (!localMicPub || localMicPub.isMuted || !localMicPub.track);
 
   React.useEffect(() => {
     if (variant === 'realtime_screening') {
       return () => {
+        liquidEngineRef.current?.stop();
+        liquidEngineRef.current = null;
         if (thinkingTimeoutRef.current) {
           clearTimeout(thinkingTimeoutRef.current);
           thinkingTimeoutRef.current = null;
+        }
+        if (interruptedTimeoutRef.current) {
+          clearTimeout(interruptedTimeoutRef.current);
+          interruptedTimeoutRef.current = null;
+        }
+        if (processingTimeoutRef.current) {
+          clearTimeout(processingTimeoutRef.current);
+          processingTimeoutRef.current = null;
         }
       };
     }
@@ -269,6 +313,38 @@ function AgentOrbOverlay({
       connectionSignatureRef.current = null;
     };
   }, [variant]);
+
+  React.useEffect(() => {
+    if (variant !== 'realtime_screening') return;
+    if (!liquidCanvasRef.current) return;
+
+    const engine = new LiquidGlassOrb(liquidCanvasRef.current);
+    liquidEngineRef.current = engine;
+    engine.start();
+    const ro = new ResizeObserver(() => {
+      engine.resize();
+    });
+    ro.observe(liquidCanvasRef.current);
+
+    return () => {
+      ro.disconnect();
+      engine.stop();
+      if (liquidEngineRef.current === engine) liquidEngineRef.current = null;
+    };
+  }, [variant]);
+
+  React.useEffect(() => {
+    if (variant !== 'realtime_screening') return;
+    liquidEngineRef.current?.setState(realtimeState, realtimeState === 'interrupted' ? 220 : 420);
+  }, [realtimeState, variant]);
+
+  React.useEffect(() => {
+    if (variant !== 'realtime_screening') return;
+    const listeningLevel = localIsSpeaking ? localAudioLevel : localAudioLevel * 0.2;
+    const ttsLevel = isSpeaking ? remoteAudioLevel : remoteAudioLevel * 0.15;
+    liquidEngineRef.current?.setAudioLevel(listeningLevel);
+    liquidEngineRef.current?.setTtsLevel(ttsLevel);
+  }, [isSpeaking, localIsSpeaking, remoteAudioLevel, localAudioLevel, variant]);
 
   React.useEffect(() => {
     if (variant === 'realtime_screening') return;
@@ -373,25 +449,82 @@ function AgentOrbOverlay({
     }
   }, [participant, localParticipant, isSpeaking, localIsSpeaking, variant]);
 
-  if (variant === 'realtime_screening') {
-    const stateClass =
-      paused
-        ? 'is-paused'
-        : visualState === 'speaking'
-          ? 'is-speaking'
-          : visualState === 'thinking'
-            ? 'is-thinking'
-            : localIsSpeaking
-              ? 'is-listening'
-              : 'is-idle';
+  React.useEffect(() => {
+    if (variant !== 'realtime_screening') return;
 
+    if (localIsSpeaking && wasAgentSpeakingRef.current) {
+      setInterruptedActive(true);
+      if (interruptedTimeoutRef.current) clearTimeout(interruptedTimeoutRef.current);
+      interruptedTimeoutRef.current = setTimeout(() => {
+        setInterruptedActive(false);
+        interruptedTimeoutRef.current = null;
+      }, 420);
+    }
+
+    if (localIsSpeaking) {
+      setProcessingActive(false);
+      if (processingTimeoutRef.current) {
+        clearTimeout(processingTimeoutRef.current);
+        processingTimeoutRef.current = null;
+      }
+    }
+
+    if (wasLocalSpeakingRealtimeRef.current && !localIsSpeaking && !isSpeaking) {
+      setProcessingActive(true);
+      if (processingTimeoutRef.current) clearTimeout(processingTimeoutRef.current);
+      processingTimeoutRef.current = setTimeout(() => {
+        setProcessingActive(false);
+        processingTimeoutRef.current = null;
+      }, 5200);
+    }
+
+    if (isSpeaking) {
+      setProcessingActive(false);
+      if (processingTimeoutRef.current) {
+        clearTimeout(processingTimeoutRef.current);
+        processingTimeoutRef.current = null;
+      }
+    }
+
+    wasAgentSpeakingRef.current = isSpeaking;
+    wasLocalSpeakingRealtimeRef.current = localIsSpeaking;
+
+    let next: typeof realtimeState = 'idle';
+    if (paused) {
+      next = 'paused';
+    } else if (interruptedActive) {
+      next = 'interrupted';
+    } else if (agentTransportMode === 'unknown') {
+      next = 'reconnecting';
+    } else if (agentAssistantState === 'speaking' || isSpeaking) {
+      next = 'speaking';
+    } else if (localIsSpeaking) {
+      next = 'listening';
+    } else if (agentAssistantState === 'thinking' || processingActive) {
+      next = 'processing';
+    } else if (micUnavailable) {
+      next = 'muted_or_no_mic';
+    } else {
+      next = 'idle';
+    }
+    setRealtimeState(next);
+
+    return () => undefined;
+  }, [agentAssistantState, agentTransportMode, interruptedActive, isSpeaking, localIsSpeaking, micUnavailable, paused, processingActive, variant]);
+
+  if (variant === 'realtime_screening') {
     return (
-      <div className={`bc-realtime-simple-orb ${paused ? 'is-paused' : ''}`} aria-label="Realtime screening orb">
+      <div
+        className={`bc-rtx-liquid-orb ${paused ? 'is-paused' : ''}`}
+        data-state={realtimeState}
+        aria-label="Realtime screening orb"
+      >
         <div className="bc-agent-orb-badge">Realtime Screening</div>
-        <div className={`bc-realtime-core ${stateClass}`} />
-        <div className={`bc-realtime-ring r1 ${stateClass}`} />
-        <div className={`bc-realtime-ring r2 ${stateClass}`} />
-        <div className={`bc-realtime-ring r3 ${stateClass}`} />
+        <div className="bc-rtx-liquid-vignette" />
+        <div className="bc-rtx-liquid-stage">
+          <canvas ref={liquidCanvasRef} className="bc-rtx-liquid-canvas" />
+        </div>
+        <div className="bc-rtx-liquid-noise" />
       </div>
     );
   }
@@ -406,7 +539,15 @@ function AgentOrbOverlay({
   );
 }
 
-function BristleconeParticipantTile({ paused = false }: { paused?: boolean }) {
+function BristleconeParticipantTile({
+  paused = false,
+  agentTransportMode = 'unknown',
+  agentAssistantState = 'unknown',
+}: {
+  paused?: boolean;
+  agentTransportMode?: AgentTransportMode;
+  agentAssistantState?: AgentAssistantState;
+}) {
   const trackRef = useMaybeTrackRefContext();
   const participant = trackRef?.participant;
   const { localParticipant } = useLocalParticipant();
@@ -419,7 +560,10 @@ function BristleconeParticipantTile({ paused = false }: { paused?: boolean }) {
   const micRef = toTrackRef(participant, Track.Source.Microphone);
   const renderOrb =
     isAgentParticipant(participant) || (!participant.isLocal && !cameraRef && Boolean(micRef));
-  const orbVariant = getAgentOrbVariant(participant);
+  const orbVariant =
+    agentTransportMode === 'realtime_ws' || agentTransportMode === 'direct_client'
+      ? 'realtime_screening'
+      : getAgentOrbVariant(participant);
 
   if (!renderOrb) {
     return <ParticipantTile />;
@@ -435,6 +579,8 @@ function BristleconeParticipantTile({ paused = false }: { paused?: boolean }) {
           localParticipant={localParticipant}
           variant={orbVariant}
           paused={paused}
+          agentTransportMode={agentTransportMode}
+          agentAssistantState={agentAssistantState}
         />
       )}
       {micRef ? <AudioTrack trackRef={micRef} /> : null}
@@ -455,9 +601,13 @@ function BristleconeParticipantTile({ paused = false }: { paused?: boolean }) {
 function FloatingAgentOrb({
   trackedParticipantIdentities,
   paused = false,
+  agentTransportMode = 'unknown',
+  agentAssistantState = 'unknown',
 }: {
   trackedParticipantIdentities: Set<string>;
   paused?: boolean;
+  agentTransportMode?: AgentTransportMode;
+  agentAssistantState?: AgentAssistantState;
 }) {
   const { localParticipant } = useLocalParticipant();
   const remoteParticipants = useRemoteParticipants({
@@ -489,8 +639,14 @@ function FloatingAgentOrb({
       <AgentOrbOverlay
         participant={fallbackAgent}
         localParticipant={localParticipant}
-        variant={getAgentOrbVariant(fallbackAgent)}
+        variant={
+          agentTransportMode === 'realtime_ws' || agentTransportMode === 'direct_client'
+            ? 'realtime_screening'
+            : getAgentOrbVariant(fallbackAgent)
+        }
         paused={paused}
+        agentTransportMode={agentTransportMode}
+        agentAssistantState={agentAssistantState}
       />
       <div className="bc-agent-floating-label">
         {fallbackAgent.name || fallbackAgent.identity}
@@ -537,7 +693,10 @@ export function BristleconeVideoConference({
   const room = useRoomContext();
   const [isInterviewPaused, setIsInterviewPaused] = React.useState(false);
   const [agentTransportMode, setAgentTransportMode] = React.useState<AgentTransportMode>('unknown');
+  const [agentAssistantState, setAgentAssistantState] = React.useState<AgentAssistantState>('unknown');
   const [agentFullDuplex, setAgentFullDuplex] = React.useState(false);
+  const [agentMediaModeEffective, setAgentMediaModeEffective] = React.useState<AgentMediaMode>('unknown');
+  const [agentMediaModeConfigured, setAgentMediaModeConfigured] = React.useState<AgentMediaMode>('unknown');
 
   React.useEffect(() => {
     const onDataReceived = (payload: Uint8Array) => {
@@ -548,8 +707,34 @@ export function BristleconeVideoConference({
         if (parsed?.type === 'agent_control_state') {
           setIsInterviewPaused(Boolean(parsed?.paused));
           const mode = String(parsed?.transportMode || '').trim();
-          setAgentTransportMode(mode === 'realtime_ws' ? 'realtime_ws' : mode === 'turn_based' ? 'turn_based' : 'unknown');
+          setAgentTransportMode(
+            mode === 'realtime_ws'
+              ? 'realtime_ws'
+              : mode === 'direct_client'
+                ? 'direct_client'
+                : mode === 'turn_based'
+                  ? 'turn_based'
+                  : 'unknown',
+          );
           setAgentFullDuplex(Boolean(parsed?.fullDuplex));
+          const assistantStateRaw = String(parsed?.assistantState || '').trim().toLowerCase();
+          setAgentAssistantState(
+            assistantStateRaw === 'speaking'
+              ? 'speaking'
+              : assistantStateRaw === 'thinking'
+                ? 'thinking'
+                : assistantStateRaw === 'idle'
+                  ? 'idle'
+                  : 'unknown',
+          );
+          const mediaModeEffective = String(parsed?.mediaModeEffective || '').trim();
+          setAgentMediaModeEffective(
+            mediaModeEffective === 'direct' ? 'direct' : mediaModeEffective === 'relay' ? 'relay' : 'unknown',
+          );
+          const mediaModeConfigured = String(parsed?.mediaModeConfigured || '').trim();
+          setAgentMediaModeConfigured(
+            mediaModeConfigured === 'direct' ? 'direct' : mediaModeConfigured === 'relay' ? 'relay' : 'unknown',
+          );
         }
       } catch {
         // Ignore non-JSON control payloads.
@@ -583,9 +768,21 @@ export function BristleconeVideoConference({
   const transportLabel =
     agentTransportMode === 'realtime_ws'
       ? `Agent Transport: Realtime WS (${agentFullDuplex ? 'Full Duplex' : 'Realtime'})`
+      : agentTransportMode === 'direct_client'
+        ? 'Agent Transport: Direct Client (Full Duplex)'
       : agentTransportMode === 'turn_based'
         ? 'Agent Transport: Turn-based (Half Duplex)'
         : 'Agent Transport: Detecting...';
+  const mediaLabel =
+    agentMediaModeEffective === 'direct'
+      ? 'Media Path: Direct'
+      : agentMediaModeEffective === 'relay'
+        ? 'Media Path: Relay'
+        : 'Media Path: Detecting...';
+  const mediaDetailLabel =
+    agentMediaModeConfigured !== 'unknown' && agentMediaModeConfigured !== agentMediaModeEffective
+      ? ` (configured: ${agentMediaModeConfigured})`
+      : '';
 
   return (
     <div className="lk-video-conference" {...props}>
@@ -605,7 +802,7 @@ export function BristleconeVideoConference({
               borderRadius: '999px',
               border: '1px solid rgba(120, 120, 120, 0.45)',
               background:
-                agentTransportMode === 'realtime_ws'
+                agentTransportMode === 'realtime_ws' || agentTransportMode === 'direct_client'
                   ? 'rgba(16, 185, 129, 0.15)'
                   : agentTransportMode === 'turn_based'
                     ? 'rgba(245, 158, 11, 0.15)'
@@ -616,17 +813,44 @@ export function BristleconeVideoConference({
           >
             {transportLabel}
           </div>
+          <div
+            style={{
+              alignSelf: 'center',
+              marginBottom: '0.5rem',
+              padding: '0.3rem 0.7rem',
+              borderRadius: '999px',
+              border: '1px solid rgba(120, 120, 120, 0.45)',
+              background:
+                agentMediaModeEffective === 'direct'
+                  ? 'rgba(16, 185, 129, 0.15)'
+                  : agentMediaModeEffective === 'relay'
+                    ? 'rgba(59, 130, 246, 0.15)'
+                    : 'rgba(100, 116, 139, 0.15)',
+              fontSize: '0.82rem',
+              fontWeight: 600,
+            }}
+          >
+            {`${mediaLabel}${mediaDetailLabel}`}
+          </div>
           {!focusTrack ? (
             <div className="lk-grid-layout-wrapper">
               <GridLayout tracks={tracks}>
-                <BristleconeParticipantTile paused={isInterviewPaused} />
-              </GridLayout>
-            </div>
+                  <BristleconeParticipantTile
+                    paused={isInterviewPaused}
+                    agentTransportMode={agentTransportMode}
+                    agentAssistantState={agentAssistantState}
+                  />
+                </GridLayout>
+              </div>
           ) : (
             <div className="lk-focus-layout-wrapper">
               <FocusLayoutContainer>
                 <CarouselLayout tracks={carouselTracks}>
-                  <BristleconeParticipantTile paused={isInterviewPaused} />
+                  <BristleconeParticipantTile
+                    paused={isInterviewPaused}
+                    agentTransportMode={agentTransportMode}
+                    agentAssistantState={agentAssistantState}
+                  />
                 </CarouselLayout>
                 <FocusLayout trackRef={focusTrack} />
               </FocusLayoutContainer>
@@ -638,7 +862,12 @@ export function BristleconeVideoConference({
             isInterviewPaused={isInterviewPaused}
             onTogglePause={togglePause}
           />
-          <FloatingAgentOrb trackedParticipantIdentities={trackedParticipantIdentities} paused={isInterviewPaused} />
+          <FloatingAgentOrb
+            trackedParticipantIdentities={trackedParticipantIdentities}
+            paused={isInterviewPaused}
+            agentTransportMode={agentTransportMode}
+            agentAssistantState={agentAssistantState}
+          />
         </div>
 
         <Chat style={{ display: showChat ? 'grid' : 'none' }} messageFormatter={chatMessageFormatter} />

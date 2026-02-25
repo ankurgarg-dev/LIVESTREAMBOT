@@ -25,8 +25,27 @@ function inferRoleTitleFromJd(jdText: string): string {
     const m = line.match(/^\s*(title|job title|position)\s*:\s*(.+)$/i);
     if (m?.[2]) return m[2].trim().slice(0, 120);
   }
+  const narrativeMatch =
+    text.match(/\blooking for (?:an?|the)\s+([a-z][a-z0-9+/\-\s]{2,80}?)(?:\s+with\b|\s+who\b|\s+to\b|[.,;])/i) ||
+    text.match(/\bseeking (?:an?|the)\s+([a-z][a-z0-9+/\-\s]{2,80}?)(?:\s+with\b|\s+who\b|\s+to\b|[.,;])/i);
+  if (narrativeMatch?.[1]) {
+    return narrativeMatch[1]
+      .replace(/\b(a|an|the)\b/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .split(' ')
+      .map((token) => {
+        const t = token.trim();
+        if (!t) return t;
+        if (/^(llm|rag|ai|ml|nlp|sre|qa|aws|gcp|mcp)$/i.test(t)) return t.toUpperCase();
+        return t[0].toUpperCase() + t.slice(1).toLowerCase();
+      })
+      .join(' ')
+      .slice(0, 120);
+  }
   for (const line of lines.slice(0, 30)) {
-    if (/^(about|responsibilities|requirements|what you'll need|must have|nice to have)\b/i.test(line)) continue;
+    if (/^(job description|about|responsibilities|requirements|what you'll need|must have|nice to have)\b/i.test(line))
+      continue;
     if (line.length < 6 || line.length > 90) continue;
     if (!/(engineer|developer|architect|scientist|manager|lead|specialist|analyst|qa|sre|devops|consultant)/i.test(line)) continue;
     return line.replace(/^[\-*•\d.)\s]+/, '').trim().slice(0, 120);
@@ -34,12 +53,66 @@ function inferRoleTitleFromJd(jdText: string): string {
   return 'Software Engineer';
 }
 
+function normalizeTitleStrength(title: string): string {
+  return String(title || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ');
+}
+
+function isGenericRoleTitle(title: string): boolean {
+  const t = normalizeTitleStrength(title);
+  if (!t) return true;
+  const generic = new Set([
+    'software engineer',
+    'engineer',
+    'developer',
+    'software developer',
+    'full stack developer',
+    'full stack engineer',
+    'backend engineer',
+    'backend developer',
+    'frontend engineer',
+    'frontend developer',
+  ]);
+  return generic.has(t);
+}
+
+function chooseBetterRoleTitle(current: string, inferred: string): string {
+  const cur = String(current || '').trim();
+  const inf = String(inferred || '').trim();
+  if (!cur) return inf || 'Software Engineer';
+  if (!inf) return cur;
+  const curGeneric = isGenericRoleTitle(cur);
+  const infGeneric = isGenericRoleTitle(inf);
+  if (curGeneric && !infGeneric) return inf;
+  if (inf.length > cur.length + 4 && !infGeneric) return inf;
+  return cur;
+}
+
+function maybePreferSdetTitle(current: string, jdText: string): string {
+  const cur = String(current || '').trim();
+  const t = String(jdText || '').toLowerCase();
+  if (!/\bsdet\b/.test(t)) return cur;
+  const senior = /\bsenior\b/.test(t) || /\bfor senior level\b/.test(t);
+  if (/\bsdet\b/i.test(cur)) return cur;
+  if (/software engineer|software developer|engineer|developer/i.test(cur)) {
+    return senior ? 'Senior SDET' : 'SDET';
+  }
+  return cur;
+}
+
 function detectLevel(text: string): { value: Level; confidence: number; rationale: string } {
   const t = text.toLowerCase();
   if (/(principal|staff\\+|distinguished)/.test(t)) {
     return { value: 'principal', confidence: 0.9, rationale: 'Detected principal/staff seniority keywords.' };
   }
-  if (/(lead|technical leadership|tech lead|manager|own strategic initiatives)/.test(t)) {
+  if (
+    /\b(tech(?:nical)?\s*lead|team\s*lead|lead\s+engineer|engineering\s+manager|people\s+manager|own strategic initiatives)\b/.test(
+      t,
+    )
+  ) {
     return { value: 'lead', confidence: 0.9, rationale: 'Detected lead/technical leadership keywords.' };
   }
   if (/(senior|5\\+ years|6\\+ years|7\\+ years)/.test(t)) {
@@ -325,9 +398,8 @@ export async function extractAndPrefillPosition(input: {
 
   const typed = extractionObj as PositionExtraction;
   const heuristic = fallbackExtraction(inferredRoleTitle, jdText);
-  if (!typed.role_title || typed.role_title.length < 4) {
-    typed.role_title = inferredRoleTitle;
-  }
+  typed.role_title = chooseBetterRoleTitle(typed.role_title, inferredRoleTitle);
+  typed.role_title = maybePreferSdetTitle(typed.role_title, jdText);
   if ((!typed.level || typed.confidence?.level < 0.6) && heuristic.confidence.level >= 0.6) {
     typed.level = heuristic.level;
     typed.confidence.level = heuristic.confidence.level;

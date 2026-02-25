@@ -39,6 +39,10 @@ agent-service/.env.*
 .env.test.local
 .env.production.local
 
+# local sqlite runtime
+prisma/.runtime/
+prisma/prisma/.runtime/
+
 # vercel
 .vercel
 

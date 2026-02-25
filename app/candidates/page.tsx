@@ -10,73 +10,6 @@ type PositionRecord = {
   level: string;
 };
 
-type DetailedSkill = {
-  skill: string;
-  category: 'must_have' | 'nice_to_have' | 'tech_stack' | 'focus_area';
-  matched: boolean;
-  score: number;
-  oneLiner: string;
-};
-
-type CandidateApplication = {
-  id: string;
-  positionId: string;
-  candidateName: string;
-  candidateEmail: string;
-  recommendation: 'strong_fit' | 'fit' | 'borderline' | 'reject';
-  conclusion: string;
-  createdAt: string;
-  cvJdScorecard?: {
-    overallScore: number;
-    mustHaveScore: number;
-    commonSkillScore: number;
-    summary: string;
-  };
-  detailedScorecard?: {
-    overallScore: number;
-    summary: string;
-    details: DetailedSkill[];
-  };
-};
-
-type CandidateProfile = {
-  id: string;
-  fullName: string;
-  email: string;
-  currentTitle?: string;
-  yearsExperience?: string;
-  keySkills?: string[];
-  candidateContext?: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-const CATEGORY_LABEL: Record<DetailedSkill['category'], string> = {
-  must_have: 'Must Have',
-  nice_to_have: 'Nice to Have',
-  tech_stack: 'Tech Stack',
-  focus_area: 'Focus Area',
-};
-
-function formatDate(value: string): string {
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? value : d.toLocaleString();
-}
-
-function formatRecommendation(value: CandidateApplication['recommendation']): string {
-  if (value === 'strong_fit') return 'Strong Fit';
-  if (value === 'fit') return 'Fit';
-  if (value === 'borderline') return 'Borderline';
-  return 'Reject';
-}
-
-function pct(value: number | undefined): number {
-  const n = Number(value || 0);
-  if (n < 0) return 0;
-  if (n > 100) return 100;
-  return Math.round(n);
-}
-
 export default function CandidatesPage() {
   const router = useRouter();
   const [loading, setLoading] = React.useState(true);
@@ -86,9 +19,6 @@ export default function CandidatesPage() {
 
   const [positions, setPositions] = React.useState<PositionRecord[]>([]);
   const [selectedPositionId, setSelectedPositionId] = React.useState('');
-  const [applications, setApplications] = React.useState<CandidateApplication[]>([]);
-  const [profiles, setProfiles] = React.useState<CandidateProfile[]>([]);
-  const [selectedId, setSelectedId] = React.useState('');
   const [initialPositionId, setInitialPositionId] = React.useState('');
 
   const [candidateName, setCandidateName] = React.useState('');
@@ -98,32 +28,11 @@ export default function CandidatesPage() {
   const [keySkills, setKeySkills] = React.useState('');
   const [candidateContext, setCandidateContext] = React.useState('');
 
-  const selected = React.useMemo(
-    () => applications.find((item) => item.id === selectedId),
-    [applications, selectedId],
-  );
-
   const loadPositions = React.useCallback(async () => {
     const response = await fetch('/api/positions', { cache: 'no-store' });
     const json = await response.json();
     if (!response.ok || json?.ok === false) throw new Error(json?.error || 'Failed to load positions');
     return Array.isArray(json?.positions) ? json.positions : [];
-  }, []);
-
-  const loadApplications = React.useCallback(async (positionId: string) => {
-    const url = positionId
-      ? `/api/candidates?positionId=${encodeURIComponent(positionId)}`
-      : '/api/candidates';
-    const response = await fetch(url, { cache: 'no-store' });
-    const json = await response.json();
-    if (!response.ok || json?.ok === false) throw new Error(json?.error || 'Failed to load applications');
-    if (json?.kind === 'profiles') {
-      setProfiles(Array.isArray(json?.candidates) ? json.candidates : []);
-      setApplications([]);
-      return;
-    }
-    setApplications(Array.isArray(json?.candidates) ? json.candidates : []);
-    setProfiles([]);
   }, []);
 
   const loadData = React.useCallback(async () => {
@@ -135,13 +44,12 @@ export default function CandidatesPage() {
       const fromQuery = String(initialPositionId || '').trim();
       const chosen = loaded.some((p: PositionRecord) => p.position_id === fromQuery) ? fromQuery : '';
       setSelectedPositionId(chosen);
-      await loadApplications(chosen);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load candidates module');
     } finally {
       setLoading(false);
     }
-  }, [initialPositionId, loadApplications, loadPositions]);
+  }, [initialPositionId, loadPositions]);
 
   React.useEffect(() => {
     const query = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams();
@@ -151,11 +59,6 @@ export default function CandidatesPage() {
   React.useEffect(() => {
     void loadData();
   }, [loadData]);
-
-  React.useEffect(() => {
-    setSelectedId('');
-    void loadApplications(selectedPositionId);
-  }, [loadApplications, selectedPositionId]);
 
   const submitApplication: React.FormEventHandler<HTMLFormElement> = async (event) => {
     event.preventDefault();
@@ -198,7 +101,7 @@ export default function CandidatesPage() {
             : 'Candidate application submitted and scored.',
         );
       }
-      await loadApplications(selectedPositionId);
+      await loadData();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to submit candidate');
     } finally {
@@ -225,18 +128,8 @@ export default function CandidatesPage() {
     }
   };
 
-  const detailsByCategory = React.useMemo(() => {
-    const rows = selected?.detailedScorecard?.details || [];
-    return {
-      must_have: rows.filter((x) => x.category === 'must_have'),
-      nice_to_have: rows.filter((x) => x.category === 'nice_to_have'),
-      tech_stack: rows.filter((x) => x.category === 'tech_stack'),
-      focus_area: rows.filter((x) => x.category === 'focus_area'),
-    };
-  }, [selected]);
-
   return (
-    <main className={styles.main}>
+    <main className={styles.main} data-lk-theme="default">
       <div className={styles.row}>
         <h2 style={{ margin: 0 }}>Candidates</h2>
         <button type="button" className="lk-button" onClick={() => router.push('/?tab=dashboard')}>
@@ -315,112 +208,10 @@ export default function CandidatesPage() {
           </section>
 
           <section className={styles.panel}>
-            <h3 style={{ margin: 0 }}>{selectedPositionId ? 'Applications' : 'Open Candidates'}</h3>
-            {selectedPositionId ? (
-              <>
-                {applications.length === 0 ? <p className={styles.meta}>No CV applications yet.</p> : null}
-                {applications.map((item) => (
-                  <div key={item.id} className={styles.card}>
-                    <div className={styles.row}>
-                      <strong>{item.candidateName}</strong>
-                      <span className={styles.badge}>{formatRecommendation(item.recommendation)}</span>
-                    </div>
-                    <div className={styles.meta}>{item.candidateEmail}</div>
-                    <div className={styles.meta}>{`Position ID: ${item.positionId}`}</div>
-                    <div className={styles.row}>
-                      <span className={styles.score}>{`Relevance: ${pct(item.cvJdScorecard?.overallScore)}/100`}</span>
-                      <span className={styles.meta}>{formatDate(item.createdAt)}</span>
-                    </div>
-                    <p className={styles.meta}>{item.cvJdScorecard?.summary || item.conclusion}</p>
-                    <div className={styles.row}>
-                      <button type="button" className="lk-button" onClick={() => setSelectedId(item.id)}>
-                        View Details
-                      </button>
-                      <a className="lk-button" href={`/api/candidates/${encodeURIComponent(item.id)}/asset`}>
-                        Download CV
-                      </a>
-                    </div>
-                  </div>
-                ))}
-              </>
-            ) : (
-              <>
-                {profiles.length === 0 ? <p className={styles.meta}>No open candidates yet.</p> : null}
-                {profiles.map((item) => (
-                  <div key={item.id} className={styles.card}>
-                    <div className={styles.row}>
-                      <strong>{item.fullName || 'Unknown Candidate'}</strong>
-                      <span className={styles.badge}>Open</span>
-                    </div>
-                    <div className={styles.meta}>{item.email || 'Email not provided'}</div>
-                    <div className={styles.meta}>{item.currentTitle || 'Title not provided'}</div>
-                    <div className={styles.meta}>{item.yearsExperience || 'Experience not provided'}</div>
-                    <div className={styles.meta}>
-                      {Array.isArray(item.keySkills) && item.keySkills.length > 0
-                        ? item.keySkills.join(', ')
-                        : 'Skills not provided'}
-                    </div>
-                    <div className={styles.row}>
-                      <span className={styles.meta}>{`Updated: ${formatDate(item.updatedAt)}`}</span>
-                    </div>
-                  </div>
-                ))}
-              </>
-            )}
+            <h3 style={{ margin: 0 }}>Candidate Creation</h3>
+            <p className={styles.meta}>Open candidates are shown on Dashboard → Candidates.</p>
           </section>
         </>
-      ) : null}
-
-      {selected ? (
-        <div className={styles.overlay} role="presentation" onClick={() => setSelectedId('')}>
-          <div className={styles.dialog} role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-            <div className={styles.row}>
-              <h3 style={{ margin: 0 }}>{`CV Match Details: ${selected.candidateName}`}</h3>
-              <button type="button" className="lk-button" onClick={() => setSelectedId('')}>
-                Close
-              </button>
-            </div>
-            <p className={styles.meta}><strong>Recommendation:</strong> {formatRecommendation(selected.recommendation)}</p>
-            <p className={styles.meta}><strong>Conclusion:</strong> {selected.conclusion}</p>
-
-            <div className={styles.grid3}>
-              <div className={styles.barWrap}>
-                <span>Overall</span>
-                <div className={styles.bar}><div className={styles.barFill} style={{ width: `${pct(selected.cvJdScorecard?.overallScore)}%` }} /></div>
-                <span className={styles.score}>{`${pct(selected.cvJdScorecard?.overallScore)}/100`}</span>
-              </div>
-              <div className={styles.barWrap}>
-                <span>Must Have</span>
-                <div className={styles.bar}><div className={styles.barFill} style={{ width: `${pct(selected.cvJdScorecard?.mustHaveScore)}%` }} /></div>
-                <span className={styles.score}>{`${pct(selected.cvJdScorecard?.mustHaveScore)}/100`}</span>
-              </div>
-              <div className={styles.barWrap}>
-                <span>Common</span>
-                <div className={styles.bar}><div className={styles.barFill} style={{ width: `${pct(selected.cvJdScorecard?.commonSkillScore)}%` }} /></div>
-                <span className={styles.score}>{`${pct(selected.cvJdScorecard?.commonSkillScore)}/100`}</span>
-              </div>
-            </div>
-
-            {(Object.keys(detailsByCategory) as Array<keyof typeof detailsByCategory>).map((key) => (
-              <div key={key}>
-                <h4 style={{ marginBottom: 6 }}>{CATEGORY_LABEL[key]}</h4>
-                {detailsByCategory[key].length === 0 ? (
-                  <p className={styles.meta}>No competencies in this category.</p>
-                ) : (
-                  <div className={styles.table}>
-                    {detailsByCategory[key].map((row) => (
-                      <div key={`${key}:${row.skill}`} className={styles.rowItem}>
-                        <span><strong>{row.skill}</strong></span>
-                        <span>{row.matched ? `${row.score}` : '0'}</span>
-                        <span className={styles.meta}>{row.oneLiner}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
       ) : null}
     </main>
   );

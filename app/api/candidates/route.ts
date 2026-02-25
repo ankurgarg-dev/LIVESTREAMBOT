@@ -165,7 +165,12 @@ export async function POST(req: NextRequest) {
       };
 
       const roleContext = buildRoleContextFromPosition(positionSnapshot, position.role_title, '');
-      const cvJdScorecard = computeCvJdScorecard({ candidateContext, roleContext, positionSnapshot });
+      const cvJdScorecard = computeCvJdScorecard({
+        candidateContext,
+        candidateSkills: keySkills,
+        roleContext,
+        positionSnapshot,
+      });
       const detailedScorecard = computeCvJdDetailedScorecard({
         candidateContext,
         mustHaves: position.must_haves,

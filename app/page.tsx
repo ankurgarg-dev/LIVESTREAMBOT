@@ -15,7 +15,7 @@ import styles from '../styles/Home.module.css';
 
 type Recommendation = 'strong_hire' | 'hire' | 'hold' | 'no_hire' | '';
 type AgentType = 'classic' | 'realtime_screening';
-type MainTab = 'dashboard' | 'positions' | 'candidates' | 'interviews' | 'settings';
+type MainTab = 'dashboard' | 'positions' | 'candidates' | 'applications' | 'interviews' | 'settings';
 type SkillCalibrationCategory = 'must_have' | 'nice_to_have';
 type SkillCalibrationItem = {
   skill: string;
@@ -117,6 +117,51 @@ type PositionRecord = PositionConfigCore & {
   updated_at: string;
   version: number;
 };
+type CandidateProfile = {
+  id: string;
+  fullName: string;
+  email: string;
+  currentTitle?: string;
+  yearsExperience?: string;
+  keySkills?: string[];
+  candidateContext?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+type CandidateScreening = {
+  candidateId: string;
+  positionId: string;
+  recommendation: 'strong_fit' | 'fit' | 'borderline' | 'reject';
+  conclusion: string;
+  blendedScore?: number;
+  blendedRecommendation?: 'strong_fit' | 'fit' | 'borderline' | 'reject';
+  updatedAt?: string;
+  cvJdScorecard?: CvJdScorecard;
+  aiScreening?: {
+    score: number;
+    summary: string;
+    strengths: string[];
+    gaps: string[];
+    reasoning: string[];
+    model: string;
+  };
+};
+
+type ApplicationRecord = {
+  id: string;
+  positionId: string;
+  candidateId?: string;
+  candidateName: string;
+  candidateEmail: string;
+  recommendation: 'strong_fit' | 'fit' | 'borderline' | 'reject';
+  conclusion: string;
+  blendedScore?: number;
+  blendedRecommendation?: 'strong_fit' | 'fit' | 'borderline' | 'reject';
+  roomName?: string;
+  interviewAgentType?: AgentType;
+  createdAt: string;
+  updatedAt: string;
+};
 
 type SetupFormState = {
   candidateName: string;
@@ -213,6 +258,7 @@ function normalizeTab(value: string | null): MainTab {
   if (
     value === 'positions' ||
     value === 'candidates' ||
+    value === 'applications' ||
     value === 'interviews' ||
     value === 'settings'
   ) {
@@ -253,6 +299,21 @@ function interviewRecencyTimestamp(interview: InterviewRecord): number {
   return 0;
 }
 
+function candidateKeyFromApplication(application: ApplicationRecord): string {
+  const email = String(application.candidateEmail || '').trim().toLowerCase();
+  const name = String(application.candidateName || '').trim().toLowerCase();
+  return email || name;
+}
+
+function interviewHasStarted(interview: InterviewRecord): boolean {
+  return Boolean(
+    String(interview.meetingActualStart || '').trim() ||
+      String(interview.transcriptText || '').trim() ||
+      String(interview.summaryFeedback || '').trim() ||
+      interview.status === 'completed',
+  );
+}
+
 function clonePosition(position: PositionRecord | PositionConfigCore): PositionConfigCore {
   return {
     role_title: position.role_title,
@@ -284,6 +345,11 @@ export default function Page() {
 
   const [interviews, setInterviews] = useState<InterviewRecord[]>([]);
   const [positions, setPositions] = useState<PositionRecord[]>([]);
+  const [openCandidates, setOpenCandidates] = useState<CandidateProfile[]>([]);
+  const [applications, setApplications] = useState<ApplicationRecord[]>([]);
+  const [candidatePositionById, setCandidatePositionById] = useState<Record<string, string>>({});
+  const [candidateScreeningById, setCandidateScreeningById] = useState<Record<string, CandidateScreening | undefined>>({});
+  const [ignoredCandidateById, setIgnoredCandidateById] = useState<Record<string, boolean>>({});
 
   const [selectedPositionId, setSelectedPositionId] = useState('');
   const [positionDraft, setPositionDraft] = useState<PositionConfigCore | null>(null);
@@ -333,6 +399,27 @@ export default function Page() {
       ),
     [interviews],
   );
+  const latestInterviewByApplicationId = useMemo(() => {
+    const byId = new Map<string, InterviewRecord>();
+    for (const application of applications) {
+      const roomName = String(application.roomName || '').trim().toLowerCase();
+      const fallbackRoomName = `application-${application.id.slice(0, 8)}`.toLowerCase();
+      const candidateKey = candidateKeyFromApplication(application);
+      const related = interviews
+        .filter((interview) => {
+          if (!interviewHasStarted(interview)) return false;
+          const interviewRoomName = String(interview.roomName || '').trim().toLowerCase();
+          if (interviewRoomName && (interviewRoomName === roomName || interviewRoomName === fallbackRoomName)) {
+            return true;
+          }
+          const interviewCandidateKey = candidateKeyOf(interview);
+          return Boolean(candidateKey && interviewCandidateKey && interviewCandidateKey === candidateKey);
+        })
+        .sort((a, b) => interviewRecencyTimestamp(b) - interviewRecencyTimestamp(a));
+      if (related[0]) byId.set(application.id, related[0]);
+    }
+    return byId;
+  }, [applications, interviews]);
 
   const fetchJsonWithTimeout = async (url: string, timeoutMs = 8000) => {
     const controller = new AbortController();
@@ -353,10 +440,12 @@ export default function Page() {
     setLoading(true);
     setError('');
     try {
-      const [interviewResult, positionResult, settingsResult] = await Promise.allSettled([
+      const [interviewResult, positionResult, settingsResult, candidateResult, applicationsResult] = await Promise.allSettled([
         fetchJsonWithTimeout('/api/interviews'),
         fetchJsonWithTimeout('/api/positions'),
         fetchJsonWithTimeout('/api/agent-settings'),
+        fetchJsonWithTimeout('/api/candidates'),
+        fetchJsonWithTimeout('/api/applications'),
       ]);
 
       let nextInterviews: InterviewRecord[] = [];
@@ -409,6 +498,30 @@ export default function Page() {
 
       setInterviews(nextInterviews);
       setPositions(nextPositions);
+      if (candidateResult.status === 'fulfilled') {
+        const { response, json } = candidateResult.value;
+        if (response.ok && json?.ok !== false && json?.kind === 'profiles') {
+          setOpenCandidates(Array.isArray(json?.candidates) ? json.candidates : []);
+        } else {
+          setOpenCandidates([]);
+          errors.push(json?.error || 'Failed to load candidates');
+        }
+      } else {
+        setOpenCandidates([]);
+        errors.push('Candidates request timed out or failed');
+      }
+      if (applicationsResult.status === 'fulfilled') {
+        const { response, json } = applicationsResult.value;
+        if (response.ok && json?.ok !== false) {
+          setApplications(Array.isArray(json?.applications) ? json.applications : []);
+        } else {
+          setApplications([]);
+          errors.push(json?.error || 'Failed to load applications');
+        }
+      } else {
+        setApplications([]);
+        errors.push('Applications request timed out or failed');
+      }
       if (errors.length > 0) {
         setError(errors.join(' | '));
       }
@@ -428,10 +541,6 @@ export default function Page() {
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     const tab = normalizeTab(q.get('tab'));
-    if (tab === 'candidates') {
-      router.replace('/candidates');
-      return;
-    }
     setActiveTab(tab);
     const interviewId = q.get('interviewId') || '';
     if (interviewId) {
@@ -471,10 +580,6 @@ export default function Page() {
   }, [selectedOutcome]);
 
   const switchTab = (tab: MainTab) => {
-    if (tab === 'candidates') {
-      router.push('/candidates');
-      return;
-    }
     setActiveTab(tab);
     router.push(`/?tab=${tab}`);
   };
@@ -501,6 +606,78 @@ export default function Page() {
     const query = params.toString();
     const base = `/rooms/${encodeURIComponent(interview.roomName)}`;
     return query ? `${base}?${query}` : base;
+  };
+
+  const buildApplicationJoinUrl = (
+    application: ApplicationRecord,
+    role: 'candidate' | 'moderator',
+  ) => {
+    const roomName = String(application.roomName || '').trim() || `application-${application.id.slice(0, 8)}`;
+    const params = new URLSearchParams();
+    params.set('autojoin', '1');
+    params.set('role', role);
+    params.set('name', role === 'candidate' ? application.candidateName || 'Candidate' : 'Moderator');
+    if (application.interviewAgentType === 'realtime_screening') {
+      params.set('agentType', 'realtime_screening');
+    }
+    return `/rooms/${encodeURIComponent(roomName)}?${params.toString()}`;
+  };
+
+  const copyApplicationRoomLink = async (application: ApplicationRecord) => {
+    const relative = buildApplicationJoinUrl(application, 'candidate');
+    const absolute = `${window.location.origin}${relative}`;
+    try {
+      await navigator.clipboard.writeText(absolute);
+      setSuccess('Interview room link copied.');
+    } catch {
+      setError('Failed to copy room link.');
+    }
+  };
+
+  const updateApplicationAgentType = async (applicationId: string, interviewAgentType: AgentType) => {
+    setSaving(true);
+    setError('');
+    setSuccess('');
+    try {
+      const response = await fetch(`/api/applications/${applicationId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ interviewAgentType }),
+      });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok || !json?.ok || !json?.application) {
+        throw new Error(json?.error || 'Failed to update application agent type');
+      }
+      setApplications((prev) =>
+        prev.map((item) => (item.id === applicationId ? (json.application as ApplicationRecord) : item)),
+      );
+      setSuccess('Application agent type updated.');
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : 'Failed to update application agent type');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteApplicationById = async (applicationId: string) => {
+    setSaving(true);
+    setError('');
+    setSuccess('');
+    try {
+      const response = await fetch(`/api/applications/${applicationId}`, {
+        method: 'DELETE',
+      });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok || !json?.ok) {
+        throw new Error(json?.error || 'Failed to delete application');
+      }
+      setApplications((prev) => prev.filter((item) => item.id !== applicationId));
+      setSuccess('Application deleted.');
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : 'Failed to delete application');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const startCreateInterview = () => {
@@ -731,8 +908,11 @@ export default function Page() {
     }
   };
 
-  const openSkillsCalibration = () => {
-    setSkillsCalibrationDraft(buildSkillCalibrationDraft(positionDraft));
+  const openSkillsCalibration = (position: PositionRecord) => {
+    setSelectedPositionId(position.position_id);
+    const draft = clonePosition(position);
+    setPositionDraft(draft);
+    setSkillsCalibrationDraft(buildSkillCalibrationDraft(draft));
     setIsSkillsCalibrationOpen(true);
   };
 
@@ -822,6 +1002,66 @@ export default function Page() {
     }
   };
 
+  const screenOpenCandidate = async (candidateId: string) => {
+    const positionId = String(candidatePositionById[candidateId] || positions[0]?.position_id || '').trim();
+    if (!candidateId || !positionId) {
+      setError('Select a position before screening.');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    setSuccess('');
+    try {
+      const response = await fetch('/api/candidates/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'screen', candidateId, positionId }),
+      });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok || !json?.ok || !json?.screening) {
+        throw new Error(json?.error || 'Failed to screen candidate');
+      }
+      setCandidateScreeningById((prev) => ({
+        ...prev,
+        [candidateId]: json.screening as CandidateScreening,
+      }));
+      setSuccess('Screening completed. Review and create or ignore application.');
+    } catch (screenError) {
+      setError(screenError instanceof Error ? screenError.message : 'Failed to screen candidate');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const createApplicationFromScreening = async (candidateId: string) => {
+    const positionId = String(candidatePositionById[candidateId] || positions[0]?.position_id || '').trim();
+    if (!positionId) {
+      setError('Select a position before creating application.');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    setSuccess('');
+    try {
+      const response = await fetch('/api/candidates/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'create', candidateId, positionId }),
+      });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok || !json?.ok) {
+        throw new Error(json?.error || 'Failed to create application');
+      }
+      setSuccess('Application created from stored screening.');
+      setCandidateScreeningById((prev) => ({ ...prev, [candidateId]: undefined }));
+      await loadData();
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : 'Failed to create application');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <>
       <main className={styles.main} data-lk-theme="default">
@@ -855,6 +1095,9 @@ export default function Page() {
             </button>
             <button type="button" className="lk-button" aria-pressed={activeTab === 'candidates'} onClick={() => switchTab('candidates')}>
               Candidates
+            </button>
+            <button type="button" className="lk-button" aria-pressed={activeTab === 'applications'} onClick={() => switchTab('applications')}>
+              Applications
             </button>
             <button type="button" className="lk-button" aria-pressed={activeTab === 'interviews'} onClick={() => switchTab('interviews')}>
               Interviews
@@ -895,6 +1138,36 @@ export default function Page() {
                       <button type="button" className="lk-button" onClick={() => openOutcome(item.id)}>
                         View details
                       </button>
+                      {item.status === 'completed' ? (
+                        <a
+                          className="lk-button"
+                          href={`/api/interviews/${item.id}/download?kind=report`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Download Report
+                        </a>
+                      ) : null}
+                      {item.status === 'completed' ? (
+                        <a
+                          className="lk-button"
+                          href={`/api/interviews/${item.id}/download?kind=transcript`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Download Transcript
+                        </a>
+                      ) : null}
+                      {item.status === 'completed' && String(item.recordingUrl || '').trim() ? (
+                        <a
+                          className="lk-button"
+                          href={`/api/interviews/${item.id}/download?kind=recording`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Download Recording
+                        </a>
+                      ) : null}
                     </div>
                   </div>
                 ))}
@@ -930,55 +1203,254 @@ export default function Page() {
 
               {positions.length === 0 ? <p>No positions found. Create one from New Position Setup.</p> : null}
               {positions.length > 0 ? (
-                <>
-                  <select value={selectedPositionId} onChange={(e) => setSelectedPositionId(e.target.value)}>
-                    {positions.map((p) => (
-                      <option key={p.position_id} value={p.position_id}>
-                        {p.role_title} ({p.level})
-                      </option>
-                    ))}
-                  </select>
-
-                  {selectedPosition && positionDraft ? (
-                    <div className={styles.reportPanel}>
-                      <h4 style={{ marginTop: 0 }}>{positionDraft.role_title}</h4>
-                      <p className={styles.interviewMeta}>{positionDraft.notes_for_interviewer || 'No JD notes saved for this position.'}</p>
-                      <p className={styles.interviewMeta}>{`Level: ${positionDraft.level} | Duration: ${positionDraft.duration_minutes}m`}</p>
-                      <p className={styles.interviewMeta}>{`Focus areas: ${positionDraft.focus_areas.join(', ') || 'None'}`}</p>
+                <div className={styles.interviewList}>
+                  {positions.map((position) => (
+                    <div key={position.position_id} className={styles.reportPanel}>
+                      <h4 style={{ marginTop: 0 }}>{position.role_title}</h4>
+                      <p className={styles.interviewMeta}>{position.notes_for_interviewer || 'No JD notes saved for this position.'}</p>
+                      <p className={styles.interviewMeta}>{`Level: ${position.level} | Duration: ${position.duration_minutes}m`}</p>
+                      <p className={styles.interviewMeta}>{`Focus areas: ${position.focus_areas.join(', ') || 'None'}`}</p>
                       <p className={styles.interviewMeta}>
-                        {`Must-haves: ${positionDraft.must_haves.join(', ') || 'None'} | Nice-to-haves: ${
-                          positionDraft.nice_to_haves.join(', ') || 'None'
+                        {`Must-haves: ${position.must_haves.join(', ') || 'None'} | Nice-to-haves: ${
+                          position.nice_to_haves.join(', ') || 'None'
                         }`}
                       </p>
-                      <p className={styles.interviewMeta}>{`Tech stack: ${positionDraft.tech_stack.join(', ') || 'None'}`}</p>
+                      <p className={styles.interviewMeta}>{`Tech stack: ${position.tech_stack.join(', ') || 'None'}`}</p>
                       <p className={styles.interviewMeta}>
-                        {`Scorecard policy: ${positionDraft.evaluation_policy} | Strictness: ${positionDraft.strictness}`}
+                        {`Scorecard policy: ${position.evaluation_policy} | Strictness: ${position.strictness}`}
                       </p>
                       <div className={styles.cardButtons}>
                         <button
                           type="button"
                           className="lk-button"
-                          onClick={() =>
-                            router.push(`/positions/new?positionId=${encodeURIComponent(selectedPosition.position_id)}`)
-                          }
+                          onClick={() => router.push(`/positions/new?positionId=${encodeURIComponent(position.position_id)}`)}
                         >
                           Edit Position
                         </button>
-                        <button type="button" className="lk-button" onClick={openSkillsCalibration}>
+                        <button type="button" className="lk-button" onClick={() => openSkillsCalibration(position)}>
                           Manage Skills Calibration
                         </button>
                         <button
                           type="button"
                           className="lk-button"
-                          onClick={() => deletePositionById(selectedPosition.position_id)}
+                          onClick={() => deletePositionById(position.position_id)}
                           disabled={saving}
                         >
                           Delete Position
                         </button>
                       </div>
                     </div>
-                  ) : null}
-                </>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {!loading && activeTab === 'candidates' ? (
+            <div className={styles.tabContent}>
+              <div className={styles.cardButtons}>
+                <button type="button" className="lk-button" onClick={() => router.push('/candidates')}>
+                  New Candidate
+                </button>
+              </div>
+
+              {openCandidates.filter((candidate) => !ignoredCandidateById[candidate.id]).length === 0 ? <p>No open candidates found.</p> : null}
+              {openCandidates.length > 0 ? (
+                <div className={styles.interviewList}>
+                  {openCandidates
+                    .filter((candidate) => !ignoredCandidateById[candidate.id])
+                    .map((candidate) => (
+                    <div key={candidate.id} className={styles.reportPanel}>
+                      <h4 style={{ marginTop: 0 }}>{candidate.fullName || 'Unknown Candidate'}</h4>
+                      <p className={styles.interviewMeta}>{candidate.email || 'Email not provided'}</p>
+                      <p className={styles.interviewMeta}>{candidate.currentTitle || 'Title not provided'}</p>
+                      <p className={styles.interviewMeta}>{candidate.yearsExperience || 'Experience not provided'}</p>
+                      <p className={styles.interviewMeta}>
+                        {Array.isArray(candidate.keySkills) && candidate.keySkills.length > 0
+                          ? candidate.keySkills.join(', ')
+                          : 'Skills not provided'}
+                      </p>
+                      {String(candidate.candidateContext || '').trim() ? (
+                        <p className={styles.interviewMeta}>{candidate.candidateContext}</p>
+                      ) : null}
+                      <p className={styles.interviewMeta}>{`Updated: ${formatDate(candidate.updatedAt)}`}</p>
+                      <label className={styles.formField}>
+                        <span className={styles.formFieldLabel}>Screen Against Position</span>
+                        <select
+                          value={candidatePositionById[candidate.id] || positions[0]?.position_id || ''}
+                          onChange={(e) =>
+                            setCandidatePositionById((prev) => ({ ...prev, [candidate.id]: e.target.value }))
+                          }
+                        >
+                          {positions.map((position) => (
+                            <option key={position.position_id} value={position.position_id}>
+                              {position.role_title} ({position.level})
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      {candidateScreeningById[candidate.id] ? (
+                        <p className={styles.interviewMeta}>
+                          {`Screening: ${
+                            candidateScreeningById[candidate.id]?.blendedRecommendation?.toUpperCase() ||
+                            candidateScreeningById[candidate.id]?.recommendation.toUpperCase()
+                          } | Blended ${
+                            candidateScreeningById[candidate.id]?.blendedScore ??
+                            candidateScreeningById[candidate.id]?.cvJdScorecard?.overallScore ??
+                            0
+                          }/100`}
+                        </p>
+                      ) : null}
+                      <div className={styles.cardButtons}>
+                        <button type="button" className="lk-button" onClick={() => screenOpenCandidate(candidate.id)} disabled={saving}>
+                          Screen
+                        </button>
+                        <button
+                          type="button"
+                          className="lk-button"
+                          onClick={() => {
+                            const positionId = String(candidatePositionById[candidate.id] || positions[0]?.position_id || '').trim();
+                            if (!positionId) {
+                              setError('Select a position first.');
+                              return;
+                            }
+                            const url = `/candidates/screening?candidateId=${encodeURIComponent(candidate.id)}&positionId=${encodeURIComponent(positionId)}`;
+                            window.open(url, 'candidate-screening', 'width=1040,height=820');
+                          }}
+                          disabled={saving}
+                        >
+                          View Screening Details
+                        </button>
+                        <button
+                          type="button"
+                          className="lk-button"
+                          onClick={() => createApplicationFromScreening(candidate.id)}
+                          disabled={saving}
+                        >
+                          Create Application
+                        </button>
+                        <button
+                          type="button"
+                          className="lk-button"
+                          onClick={() => setIgnoredCandidateById((prev) => ({ ...prev, [candidate.id]: true }))}
+                          disabled={saving}
+                        >
+                          Ignore
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {!loading && activeTab === 'applications' ? (
+            <div className={styles.tabContent}>
+              <h3 style={{ margin: 0 }}>Applications</h3>
+              {applications.length === 0 ? <p>No applications found.</p> : null}
+              {applications.length > 0 ? (
+                <div className={styles.interviewList}>
+                  {applications.map((application) => {
+                    const position = positions.find((item) => item.position_id === application.positionId);
+                    const latestInterview = latestInterviewByApplicationId.get(application.id);
+                    const screeningScore =
+                      Number(application.blendedScore || 0) > 0
+                        ? Number(application.blendedScore || 0)
+                        : 0;
+                    return (
+                      <div key={application.id} className={styles.reportPanel}>
+                        <h4 style={{ marginTop: 0 }}>{application.candidateName || 'Unknown Candidate'}</h4>
+                        <p className={styles.interviewMeta}>{application.candidateEmail || 'Email not provided'}</p>
+                        <p className={styles.interviewMeta}>{`Position: ${position?.role_title || application.positionId}`}</p>
+                        <p className={styles.interviewMeta}>{`Screening score: ${screeningScore}/100`}</p>
+                        <p className={styles.interviewMeta}>{`Recommendation: ${(application.blendedRecommendation || application.recommendation || 'reject').toUpperCase()}`}</p>
+                        <p className={styles.interviewMeta}>{`Room: ${application.roomName || `application-${application.id.slice(0, 8)}`}`}</p>
+                        <p className={styles.interviewMeta}>
+                          {latestInterview ? `Interview artifacts available (latest: ${formatDate(latestInterview.updatedAt)})` : 'No completed/started interview artifacts yet.'}
+                        </p>
+                        <label className={styles.formField}>
+                          <span className={styles.formFieldLabel}>Interview Agent Type</span>
+                          <select
+                            value={application.interviewAgentType || 'classic'}
+                            onChange={(e) =>
+                              void updateApplicationAgentType(
+                                application.id,
+                                e.target.value === 'realtime_screening' ? 'realtime_screening' : 'classic',
+                              )
+                            }
+                            disabled={saving}
+                          >
+                            <option value="classic">Classic</option>
+                            <option value="realtime_screening">Realtime Screening</option>
+                          </select>
+                        </label>
+                        <div className={styles.cardButtons}>
+                          <button
+                            type="button"
+                            className="lk-button"
+                            onClick={() => router.push(buildApplicationJoinUrl(application, 'candidate'))}
+                          >
+                            Join as Candidate
+                          </button>
+                          <button
+                            type="button"
+                            className="lk-button"
+                            onClick={() => router.push(buildApplicationJoinUrl(application, 'moderator'))}
+                          >
+                            Join as Moderator
+                          </button>
+                          <button type="button" className="lk-button" onClick={() => void copyApplicationRoomLink(application)}>
+                            Copy Interview Room Link
+                          </button>
+                          {latestInterview ? (
+                            <button type="button" className="lk-button" onClick={() => openOutcome(latestInterview.id)}>
+                              View Outcomes
+                            </button>
+                          ) : null}
+                          {latestInterview ? (
+                            <a
+                              className="lk-button"
+                              href={`/api/interviews/${latestInterview.id}/download?kind=report`}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Download Report
+                            </a>
+                          ) : null}
+                          {latestInterview ? (
+                            <a
+                              className="lk-button"
+                              href={`/api/interviews/${latestInterview.id}/download?kind=transcript`}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Download Transcript
+                            </a>
+                          ) : null}
+                          {latestInterview && String(latestInterview.recordingUrl || '').trim() ? (
+                            <a
+                              className="lk-button"
+                              href={`/api/interviews/${latestInterview.id}/download?kind=recording`}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Download Recording
+                            </a>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="lk-button"
+                            onClick={() => void deleteApplicationById(application.id)}
+                            disabled={saving}
+                          >
+                            Delete Application
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               ) : null}
             </div>
           ) : null}
@@ -1348,6 +1820,36 @@ export default function Page() {
                       <button type="button" className="lk-button" onClick={() => openOutcome(item.id)}>
                         View outcomes
                       </button>
+                      {item.status === 'completed' ? (
+                        <a
+                          className="lk-button"
+                          href={`/api/interviews/${item.id}/download?kind=report`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Download Report
+                        </a>
+                      ) : null}
+                      {item.status === 'completed' ? (
+                        <a
+                          className="lk-button"
+                          href={`/api/interviews/${item.id}/download?kind=transcript`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Download Transcript
+                        </a>
+                      ) : null}
+                      {item.status === 'completed' && String(item.recordingUrl || '').trim() ? (
+                        <a
+                          className="lk-button"
+                          href={`/api/interviews/${item.id}/download?kind=recording`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Download Recording
+                        </a>
+                      ) : null}
                       <button
                         type="button"
                         className="lk-button"

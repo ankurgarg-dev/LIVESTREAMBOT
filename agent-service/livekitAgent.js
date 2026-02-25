@@ -71,6 +71,7 @@ const BOT_NAME = (process.env.BOT_NAME || 'Bristlecone AI Agent').trim();
 const ROOM_IDLE_TIMEOUT_MS = Math.max(30000, Number(process.env.AGENT_ROOM_IDLE_TIMEOUT_MS || 180000));
 const ENABLE_BARGE_IN = process.env.ENABLE_BARGE_IN !== 'false';
 const ENABLE_FULL_DUPLEX = process.env.ENABLE_FULL_DUPLEX !== 'false';
+const AGENT_MEDIA_MODE = String(process.env.AGENT_MEDIA_MODE || 'direct').trim().toLowerCase() === 'relay' ? 'relay' : 'direct';
 const EMPTY_ROOM_FINALIZE_DELAY_MS = Math.max(
   3000,
   Number(process.env.EMPTY_ROOM_FINALIZE_DELAY_MS || 8000),
@@ -547,6 +548,111 @@ function firstNonEmptyText(...values) {
   return '';
 }
 
+function normalizeSkillList(values, limit = 20) {
+  if (!Array.isArray(values)) return [];
+  return values
+    .map((value) => String(value ?? '').trim())
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+function extractQuestionFromText(text) {
+  const chunks = String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(/(?<=[?])\s+/)
+    .map((chunk) => chunk.trim())
+    .filter(Boolean);
+  for (const chunk of chunks) {
+    if (chunk.includes('?')) return chunk.slice(0, 280);
+  }
+  return '';
+}
+
+function includesAny(normalizedText, phrases) {
+  return phrases.some((phrase) => normalizedText.includes(phrase));
+}
+
+function findMatchingSkillName(normalizedText, skills) {
+  for (const raw of skills) {
+    const skill = String(raw || '').trim();
+    if (!skill) continue;
+    if (normalizedText.includes(skill.toLowerCase())) return skill;
+  }
+  return '';
+}
+
+function parseVoiceControls(normalizedText) {
+  const controls = [];
+  if (/\b(slower|slow down)\b/.test(normalizedText)) controls.push('speak slower');
+  if (/\b(faster|speed up)\b/.test(normalizedText)) controls.push('speak faster');
+  if (/\b(louder|increase volume|speak up)\b/.test(normalizedText)) controls.push('speak louder');
+  if (/\b(softer|quieter|lower volume)\b/.test(normalizedText)) controls.push('speak softer');
+  if (/\b(accent|british|american|indian|australian)\b/.test(normalizedText)) controls.push('adjust accent');
+  if (/\b(repeat|say that again)\b/.test(normalizedText)) controls.push('repeat');
+  if (/\b(rephrase|paraphrase)\b/.test(normalizedText)) controls.push('rephrase');
+  if (/\b(pause)\b/.test(normalizedText)) controls.push('pause');
+  if (/\b(resume|continue)\b/.test(normalizedText)) controls.push('resume');
+  return controls;
+}
+
+function classifyUtterance(text, context = {}) {
+  const normalized = String(text || '').toLowerCase().trim();
+  const mustHaveSkills = normalizeSkillList(context.mustHaveSkills);
+  const requiredTechStack = normalizeSkillList(context.requiredTechStack);
+  const goodToHaveSkills = normalizeSkillList(context.goodToHaveSkills);
+  const currentSkill = String(context.currentSkill || '').trim();
+  const voiceControls = parseVoiceControls(normalized);
+  if (voiceControls.length > 0) {
+    return { classification: 'VOICE_CONTROL', driftSkill: '', voiceControls };
+  }
+
+  const explicitPivot = /\b(let'?s talk about|can we talk about|switch to|move to|focus on|ask about)\b/.test(
+    normalized,
+  );
+  const driftSkill = findMatchingSkillName(normalized, goodToHaveSkills);
+  if (explicitPivot && driftSkill) {
+    return { classification: 'GOOD_TO_HAVE_DRIFT', driftSkill, voiceControls: [] };
+  }
+
+  if (
+    includesAny(normalized, [
+      'joke',
+      'funny',
+      'trivia',
+      'movie',
+      'sports',
+      'weather',
+      'news',
+      'celebrity',
+      'horoscope',
+      'riddle',
+      'game',
+      'song',
+      'personal advice',
+    ])
+  ) {
+    return { classification: 'OFF_TOPIC', driftSkill: '', voiceControls: [] };
+  }
+
+  const interviewTerms = [currentSkill, ...mustHaveSkills, ...requiredTechStack]
+    .map((term) => String(term || '').trim().toLowerCase())
+    .filter(Boolean);
+  if (interviewTerms.some((term) => normalized.includes(term))) {
+    return { classification: 'INTERVIEW_RELEVANT', driftSkill: '', voiceControls: [] };
+  }
+
+  if (normalized.split(/\s+/).filter(Boolean).length <= 2) {
+    return { classification: 'UNCLEAR', driftSkill: '', voiceControls: [] };
+  }
+
+  return { classification: 'INTERVIEW_RELEVANT', driftSkill: '', voiceControls: [] };
+}
+
+function buildRedirectPrefix() {
+  return "I hear you. I'll keep us focused on the interview.";
+}
+
 function getAgentSettingsPath() {
   const baseDir = process.env.INTERVIEW_DATA_DIR || path.join(os.homedir(), '.bristlecone-data', 'interviews');
   return path.join(baseDir, 'agent-settings.json');
@@ -601,10 +707,38 @@ function buildRealtimeScreeningRuntimeInstruction({
   candidateContext = '',
   roleContext = '',
   basePrompt = '',
+  jobMetadata = {},
+  interviewState = {},
+  voiceStyleInstruction = '',
 } = {}) {
   const contextLines = [];
   if (candidateContext) contextLines.push(`Candidate context: ${candidateContext}`);
   if (roleContext) contextLines.push(`Role context: ${roleContext}`);
+  const mustHaveSkills = normalizeSkillList(jobMetadata.mustHaveSkills);
+  const requiredTechStack = normalizeSkillList(jobMetadata.requiredTechStack);
+  const goodToHaveSkills = normalizeSkillList(jobMetadata.goodToHaveSkills);
+  const currentSkill = String(interviewState.currentSkill || '').trim();
+  const currentQuestion = String(interviewState.currentQuestion || '').trim();
+  const currentTopic = String(interviewState.currentTopic || '').trim();
+  contextLines.push('Interview guardrails: stay strictly in interview mode.');
+  contextLines.push(
+    'Allowed only: interview Q&A, follow-ups, clarifications tied to the current question, and voice controls.',
+  );
+  contextLines.push(
+    'Disallowed: jokes, entertainment, trivia/general knowledge, personal advice, unrelated chat. Refuse and redirect.',
+  );
+  contextLines.push(
+    'Must-have focus: keep majority probing on must-have skills; use required tech stack to validate must-have depth; defer good-to-have topics.',
+  );
+  contextLines.push(
+    `Current anchor: skill="${currentSkill || 'unassigned'}", topic="${currentTopic || currentSkill || 'unassigned'}", question="${currentQuestion || 'unassigned'}".`,
+  );
+  contextLines.push(`Must-have skills: ${mustHaveSkills.join(', ') || 'not provided'}`);
+  contextLines.push(`Required tech stack: ${requiredTechStack.join(', ') || 'not provided'}`);
+  contextLines.push(`Good-to-have skills (defer): ${goodToHaveSkills.join(', ') || 'not provided'}`);
+  if (voiceStyleInstruction) {
+    contextLines.push(`Voice style controls: ${voiceStyleInstruction}`);
+  }
   const contextBlock = contextLines.length ? `\n\nKnown context:\n${contextLines.join('\n')}` : '';
 
   const prompt = firstNonEmptyText(basePrompt) || getDefaultRealtimeScreeningPrompt();
@@ -716,6 +850,8 @@ async function createAgentSession(
 
   room.on(RoomEvent.ParticipantDisconnected, (participant) => {
     console.log(`[room:${roomName}] participant disconnected: ${participant.identity}`);
+    directClientReadyByParticipant.delete(participant.identity);
+    void publishPauseState();
     if (emptyRoomStopTimer) {
       clearTimeout(emptyRoomStopTimer);
       emptyRoomStopTimer = null;
@@ -772,6 +908,19 @@ async function createAgentSession(
     .trim()
     .replace(/\s+/g, ' ')
     .slice(0, 2500);
+  const jobMetadata = {
+    mustHaveSkills: [],
+    requiredTechStack: [],
+    goodToHaveSkills: [],
+  };
+  const interviewState = {
+    currentQuestion: '',
+    currentSkill: '',
+    currentTopic: '',
+  };
+  let voiceStyleInstruction = '';
+  let lastSkillAnchorTs = 0;
+  let lastHeartbeatAnchorTs = 0;
   const fallbackRuntimeInstruction = firstNonEmptyText(
     process.env.OPENAI_RUNTIME_INSTRUCTION,
     'Have a natural spoken conversation. Keep responses brief, clear, and friendly.',
@@ -784,7 +933,10 @@ async function createAgentSession(
   let processingInputQueue = false;
   let queueWorker = Promise.resolve();
   const inputQueue = [];
-  const isRealtimeDuplexAgent = selectedAgentType === AGENT_TYPE_REALTIME_SCREENING;
+  const isDirectClientMediaMode = selectedAgentType === AGENT_TYPE_REALTIME_SCREENING && AGENT_MEDIA_MODE === 'direct';
+  const isRealtimeDuplexAgent = selectedAgentType === AGENT_TYPE_REALTIME_SCREENING && ENABLE_FULL_DUPLEX;
+  const mediaModeConfigured = AGENT_MEDIA_MODE;
+  const directClientReadyByParticipant = new Map();
   let realtimeWs = null;
   let realtimeReady = false;
   const assistantTranscriptByItemId = new Map();
@@ -792,6 +944,15 @@ async function createAgentSession(
   let lastGoodAppBaseUrl = appBaseUrls[0] || '';
   const apiRequestTimeoutMs = Math.max(1200, Number(process.env.AGENT_API_TIMEOUT_MS || 3500));
   const apiRetryCount = Math.max(1, Number(process.env.AGENT_API_RETRY_COUNT || 2));
+  const getMediaModeEffective = () => {
+    if (!isDirectClientMediaMode) return 'relay';
+    for (const ready of directClientReadyByParticipant.values()) {
+      if (ready) return 'direct';
+    }
+    return 'relay';
+  };
+  const isDirectMediaActive = () => isDirectClientMediaMode && getMediaModeEffective() === 'direct';
+
   const requestInterruption = () => {
     if (assistantState === 'idle') return;
     interruptRequested = true;
@@ -834,11 +995,146 @@ async function createAgentSession(
     if (transcript.length > 220) transcript.splice(0, transcript.length - 220);
   };
 
+  const updateJobMetadata = ({ mustHaveSkills, requiredTechStack, goodToHaveSkills } = {}) => {
+    if (Array.isArray(mustHaveSkills)) {
+      jobMetadata.mustHaveSkills = normalizeSkillList(mustHaveSkills);
+    }
+    if (Array.isArray(requiredTechStack)) {
+      jobMetadata.requiredTechStack = normalizeSkillList(requiredTechStack);
+    }
+    if (Array.isArray(goodToHaveSkills)) {
+      jobMetadata.goodToHaveSkills = normalizeSkillList(goodToHaveSkills);
+    }
+    if (!interviewState.currentSkill && jobMetadata.mustHaveSkills.length > 0) {
+      interviewState.currentSkill = String(jobMetadata.mustHaveSkills[0] || '');
+      interviewState.currentTopic = interviewState.currentSkill;
+    }
+  };
+
+  const updateInterviewState = ({ currentQuestion, currentSkill, currentTopic } = {}) => {
+    const question = String(currentQuestion || '').trim();
+    const skill = String(currentSkill || '').trim();
+    const topic = String(currentTopic || '').trim();
+    if (question) interviewState.currentQuestion = question.slice(0, 280);
+    if (skill) interviewState.currentSkill = skill.slice(0, 120);
+    if (topic) interviewState.currentTopic = topic.slice(0, 120);
+  };
+
+  const sendRealtimeSystemMessage = (text) => {
+    if (!realtimeWs || !realtimeReady) return;
+    const content = String(text || '').trim();
+    if (!content) return;
+    realtimeWs.send({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'system',
+        content: [{ type: 'input_text', text: content.slice(0, 900) }],
+      },
+    });
+  };
+
+  // Anchors the model to one must-have skill before the next question/follow-up turn.
+  const setCurrentSkill = (skillName, currentQuestion, topicLabel = '') => {
+    const nextSkill = String(skillName || '').trim() || interviewState.currentSkill || jobMetadata.mustHaveSkills[0] || '';
+    const nextQuestion = String(currentQuestion || '').trim() || interviewState.currentQuestion;
+    const nextTopic = String(topicLabel || '').trim() || nextSkill;
+    if (!nextSkill) return;
+    interviewState.currentSkill = nextSkill;
+    interviewState.currentTopic = nextTopic;
+    if (nextQuestion) {
+      interviewState.currentQuestion = nextQuestion.slice(0, 280);
+    }
+    if (!realtimeWs || !realtimeReady) return;
+    const now = Date.now();
+    if (now - lastSkillAnchorTs < 1000) return;
+    lastSkillAnchorTs = now;
+    sendRealtimeSystemMessage(
+      [
+        `Interview mode. Current must-have skill focus: ${interviewState.currentSkill}.`,
+        `Current question: ${interviewState.currentQuestion || 'Please answer the current interview question.'}.`,
+        'Stay strictly scoped to this skill. If the candidate drifts, redirect back.',
+      ].join('\n'),
+    );
+  };
+
+  const injectCurrentSkillHeartbeat = () => {
+    if (!realtimeWs || !realtimeReady) return;
+    if (!interviewState.currentSkill) return;
+    const now = Date.now();
+    if (now - lastHeartbeatAnchorTs < 45000) return;
+    lastHeartbeatAnchorTs = now;
+    sendRealtimeSystemMessage(
+      `Still evaluating must-have skill: ${interviewState.currentSkill}. Keep this turn tightly scoped to the current question.`,
+    );
+  };
+
+  const applyVoiceControls = (controls = []) => {
+    const deduped = Array.from(new Set(controls));
+    if (deduped.length === 0) return;
+    voiceStyleInstruction = deduped.join(', ');
+    if (isRealtimeDuplexAgent && realtimeWs) {
+      sendRealtimeSessionUpdate();
+    }
+  };
+
+  const buildRedirectTail = () =>
+    interviewState.currentQuestion
+      ? `Continuing: ${interviewState.currentQuestion}`
+      : `Let's go back to ${interviewState.currentSkill || 'the current must-have skill'}.`;
+
+  const buildTurnGuard = (text) => {
+    const result = classifyUtterance(text, {
+      mustHaveSkills: jobMetadata.mustHaveSkills,
+      requiredTechStack: jobMetadata.requiredTechStack,
+      goodToHaveSkills: jobMetadata.goodToHaveSkills,
+      currentSkill: interviewState.currentSkill,
+    });
+
+    if (result.classification === 'VOICE_CONTROL') {
+      applyVoiceControls(result.voiceControls);
+      return {
+        ...result,
+        shouldRedirect: true,
+        systemMessage: `Interview mode. Requested voice controls: ${result.voiceControls.join(', ')}. Respond in 1-2 sentences: "${buildRedirectPrefix()} ${buildRedirectTail()}" Then continue on ${interviewState.currentSkill || 'the active must-have skill'}.`,
+      };
+    }
+    if (result.classification === 'OFF_TOPIC') {
+      return {
+        ...result,
+        shouldRedirect: true,
+        systemMessage: `Interview mode. Do not answer off-topic request. Respond in 1-2 sentences: "${buildRedirectPrefix()} ${buildRedirectTail()}"`,
+      };
+    }
+    if (result.classification === 'GOOD_TO_HAVE_DRIFT') {
+      return {
+        ...result,
+        shouldRedirect: true,
+        systemMessage: `Candidate is drifting to good-to-have topic: ${result.driftSkill || 'unknown'}. Redirect back to must-have skill: ${interviewState.currentSkill || jobMetadata.mustHaveSkills[0] || 'current must-have'}. Ask a focused follow-up on ${interviewState.currentSkill || jobMetadata.mustHaveSkills[0] || 'the current skill'}.`,
+      };
+    }
+    if (result.classification === 'UNCLEAR') {
+      return {
+        ...result,
+        shouldRedirect: false,
+        systemMessage: `Interview mode. Candidate response is unclear. Ask one brief clarifying question tied to ${interviewState.currentSkill || 'the active must-have skill'}.`,
+      };
+    }
+    return {
+      ...result,
+      shouldRedirect: false,
+      systemMessage: '',
+    };
+  };
+
   const getRuntimeInstruction = () =>
     INTERVIEW_MODE
       ? agent.buildRuntimeInstruction({
           candidateContext,
           roleContext,
+          jobMetadata,
+          interviewState,
+          voiceStyleInstruction,
         })
       : fallbackRuntimeInstruction;
 
@@ -857,7 +1153,7 @@ async function createAgentSession(
         },
         turn_detection: {
           type: 'server_vad',
-          create_response: true,
+          create_response: false,
           interrupt_response: true,
           threshold: REALTIME_SERVER_VAD_THRESHOLD,
           silence_duration_ms: Math.max(300, Math.min(1200, sttTurnConfig.maxSilenceMs)),
@@ -901,6 +1197,21 @@ async function createAgentSession(
       await ensureInterviewStarted().catch(() => undefined);
       appendTranscript({ role: 'candidate', by: 'participant', text, ts: nowIso() });
       console.log(`\n[user][${roomName}] ${text}`);
+      const turnGuard = buildTurnGuard(text);
+      if (turnGuard.systemMessage) {
+        sendRealtimeSystemMessage(turnGuard.systemMessage);
+      } else {
+        injectCurrentSkillHeartbeat();
+      }
+      if (interviewState.currentSkill) {
+        setCurrentSkill(interviewState.currentSkill, interviewState.currentQuestion, interviewState.currentTopic);
+      }
+      realtimeWs.send({
+        type: 'response.create',
+        response: {
+          modalities: ['audio', 'text'],
+        },
+      });
     });
 
     realtimeWs.on('response.audio_transcript.delta', (event) => {
@@ -918,6 +1229,16 @@ async function createAgentSession(
       if (itemId) assistantTranscriptByItemId.delete(itemId);
       if (text && !isInterviewPaused) {
         appendTranscript({ role: 'assistant', by: selectedBotName, text, ts: nowIso() });
+        const maybeQuestion = extractQuestionFromText(text);
+        const maybeMustHaveSkill = findMatchingSkillName(
+          String(text || '').toLowerCase(),
+          jobMetadata.mustHaveSkills,
+        );
+        if (maybeMustHaveSkill) {
+          setCurrentSkill(maybeMustHaveSkill, maybeQuestion || interviewState.currentQuestion, maybeMustHaveSkill);
+        } else if (maybeQuestion) {
+          updateInterviewState({ currentQuestion: maybeQuestion });
+        }
       }
     });
 
@@ -1005,6 +1326,14 @@ async function createAgentSession(
       const latest = await fetchLatestInterviewByRoom();
       if (!latest?.id) return;
       interviewId = latest.id;
+      updateJobMetadata({
+        mustHaveSkills: latest?.positionSnapshot?.must_haves || [],
+        requiredTechStack: latest?.positionSnapshot?.tech_stack || [],
+        goodToHaveSkills: latest?.positionSnapshot?.nice_to_haves || [],
+      });
+      if (interviewState.currentSkill) {
+        setCurrentSkill(interviewState.currentSkill, interviewState.currentQuestion, interviewState.currentTopic);
+      }
       await patchInterview(interviewId, {
         meetingActualStart: interviewStartedAt,
       });
@@ -1175,7 +1504,7 @@ async function createAgentSession(
   };
 
   const publishFinalReport = async (stopReason) => {
-    if (stopReason !== 'room_empty') return;
+    // Publish for any shutdown path once the interview truly started.
     if (finalReportPublished || !candidateEverJoined) return;
     if (!interviewStarted) {
       await ensureInterviewStarted().catch(() => undefined);
@@ -1217,11 +1546,20 @@ async function createAgentSession(
   const extractPayload = (payload) => {
     try {
       const raw = TEXT_DECODER.decode(payload).trim();
-      if (!raw) return { text: null, contextUpdated: false };
+      if (!raw) {
+        return {
+          text: null,
+          contextUpdated: false,
+          metadataUpdated: false,
+          interviewStateUpdated: false,
+        };
+      }
 
       if (raw.startsWith('{')) {
         const parsed = JSON.parse(raw);
         let contextUpdated = false;
+        let metadataUpdated = false;
+        let interviewStateUpdated = false;
         const ctx = parsed?.context || {};
         const cv = parsed?.cv || parsed?.resume || parsed?.candidate_cv || ctx?.cv || ctx?.resume || '';
         const role = parsed?.role || parsed?.job || parsed?.position || ctx?.role || ctx?.job || '';
@@ -1233,6 +1571,43 @@ async function createAgentSession(
           roleContext = role.trim().replace(/\s+/g, ' ').slice(0, 2500);
           contextUpdated = true;
         }
+        const maybeMustHaveSkills =
+          parsed?.mustHaveSkills ??
+          parsed?.must_have_skills ??
+          ctx?.mustHaveSkills ??
+          ctx?.must_have_skills;
+        const maybeRequiredTechStack =
+          parsed?.requiredTechStack ??
+          parsed?.required_tech_stack ??
+          ctx?.requiredTechStack ??
+          ctx?.required_tech_stack;
+        const maybeGoodToHaveSkills =
+          parsed?.goodToHaveSkills ??
+          parsed?.good_to_have_skills ??
+          ctx?.goodToHaveSkills ??
+          ctx?.good_to_have_skills;
+        if (Array.isArray(maybeMustHaveSkills) || Array.isArray(maybeRequiredTechStack) || Array.isArray(maybeGoodToHaveSkills)) {
+          updateJobMetadata({
+            mustHaveSkills: Array.isArray(maybeMustHaveSkills) ? maybeMustHaveSkills : undefined,
+            requiredTechStack: Array.isArray(maybeRequiredTechStack) ? maybeRequiredTechStack : undefined,
+            goodToHaveSkills: Array.isArray(maybeGoodToHaveSkills) ? maybeGoodToHaveSkills : undefined,
+          });
+          metadataUpdated = true;
+        }
+        const nextCurrentQuestion =
+          parsed?.currentQuestion ?? parsed?.current_question ?? ctx?.currentQuestion ?? ctx?.current_question;
+        const nextCurrentSkill =
+          parsed?.currentSkill ?? parsed?.current_skill ?? ctx?.currentSkill ?? ctx?.current_skill;
+        const nextCurrentTopic =
+          parsed?.currentTopic ?? parsed?.current_topic ?? ctx?.currentTopic ?? ctx?.current_topic;
+        if (nextCurrentQuestion || nextCurrentSkill || nextCurrentTopic) {
+          updateInterviewState({
+            currentQuestion: nextCurrentQuestion,
+            currentSkill: nextCurrentSkill,
+            currentTopic: nextCurrentTopic,
+          });
+          interviewStateUpdated = true;
+        }
 
         const maybeText =
           parsed?.text ??
@@ -1243,12 +1618,14 @@ async function createAgentSession(
         return {
           text: typeof maybeText === 'string' ? maybeText.trim() : null,
           contextUpdated,
+          metadataUpdated,
+          interviewStateUpdated,
         };
       }
 
-      return { text: raw, contextUpdated: false };
+      return { text: raw, contextUpdated: false, metadataUpdated: false, interviewStateUpdated: false };
     } catch {
-      return { text: null, contextUpdated: false };
+      return { text: null, contextUpdated: false, metadataUpdated: false, interviewStateUpdated: false };
     }
   };
 
@@ -1264,7 +1641,13 @@ async function createAgentSession(
   };
 
   const publishPauseState = async () => {
-    const transportMode = isRealtimeDuplexAgent && realtimeReady ? 'realtime_ws' : 'turn_based';
+    const mediaModeEffective = getMediaModeEffective();
+    const transportMode =
+      mediaModeEffective === 'direct'
+        ? 'direct_client'
+        : isRealtimeDuplexAgent && realtimeReady
+          ? 'realtime_ws'
+          : 'turn_based';
     try {
       const payload = Buffer.from(
         JSON.stringify({
@@ -1272,8 +1655,11 @@ async function createAgentSession(
           paused: isInterviewPaused,
           agentType: selectedAgentType,
           transportMode,
-          fullDuplex: transportMode === 'realtime_ws',
+          fullDuplex: transportMode === 'realtime_ws' || transportMode === 'direct_client',
           realtimeReady: Boolean(realtimeReady),
+          assistantState: String(assistantState || 'idle'),
+          mediaModeConfigured,
+          mediaModeEffective,
           ts: nowIso(),
         }),
       );
@@ -1284,17 +1670,28 @@ async function createAgentSession(
   };
 
   const processUserInput = async (text, sourceIdentity = 'participant', seq = 0) => {
+    if (isDirectMediaActive()) return;
     const trimmed = text.trim();
     if (!trimmed) return;
     if (isInterviewPaused && sourceIdentity !== 'agent_bootstrap') return;
+    const isBootstrap = sourceIdentity === 'agent_bootstrap';
+
+    if (isBootstrap && !interviewState.currentSkill && jobMetadata.mustHaveSkills.length > 0) {
+      setCurrentSkill(
+        jobMetadata.mustHaveSkills[0],
+        interviewState.currentQuestion || `Let's begin with ${jobMetadata.mustHaveSkills[0]}.`,
+        jobMetadata.mustHaveSkills[0],
+      );
+    }
 
     const userMessage =
-      sourceIdentity === 'agent_bootstrap'
+      isBootstrap
         ? 'Start the interview now with a warm intro, set expectations, and ask for consent to begin.'
         : trimmed;
     const runtimeInstruction = getRuntimeInstruction();
+    const turnGuard = isBootstrap ? null : buildTurnGuard(trimmed);
 
-    if (sourceIdentity !== 'agent_bootstrap' && !isInterviewPaused) {
+    if (!isBootstrap && !isInterviewPaused) {
       console.log(`\n[user][${roomName}] ${trimmed}`);
       appendTranscript({ role: 'candidate', by: sourceIdentity, text: trimmed, ts: nowIso() });
     }
@@ -1319,6 +1716,14 @@ async function createAgentSession(
           content: [{ type: 'input_text', text: userMessage }],
         },
       });
+      if (turnGuard?.systemMessage) {
+        sendRealtimeSystemMessage(turnGuard.systemMessage);
+      } else {
+        injectCurrentSkillHeartbeat();
+      }
+      if (interviewState.currentSkill) {
+        setCurrentSkill(interviewState.currentSkill, interviewState.currentQuestion, interviewState.currentTopic);
+      }
       realtimeWs.send({
         type: 'response.create',
         response: {
@@ -1330,7 +1735,8 @@ async function createAgentSession(
     }
 
     let assistantText = '';
-    const llmDeltaStream = llmService.streamAssistantReply(userMessage, {
+    const safeUserMessage = turnGuard?.shouldRedirect ? buildRedirectTail() : userMessage;
+    const llmDeltaStream = llmService.streamAssistantReply(safeUserMessage, {
       runtimeInstruction,
     });
     const guardedLlmDeltaStream = (async function* guarded() {
@@ -1371,6 +1777,7 @@ async function createAgentSession(
   };
 
   const queueUserTurn = (text, sourceIdentity = 'participant') => {
+    if (isDirectMediaActive() && sourceIdentity !== 'stdin' && sourceIdentity !== 'simulated') return;
     const cleaned = String(text || '').trim();
     if (!cleaned) return;
 
@@ -1394,6 +1801,11 @@ async function createAgentSession(
   const startRemoteAudioTranscription = (track, participant) => {
     const streamKey = `${participant.identity}:${track.sid ?? 'audio'}`;
     if (activeInputStreams.has(streamKey)) return;
+
+    if (isDirectMediaActive()) {
+      console.log(`[direct][${roomName}] skipping agent audio relay for '${participant.identity}'`);
+      return;
+    }
 
     if (isRealtimeDuplexAgent) {
       const stream = new AudioStream(track, {
@@ -1485,6 +1897,29 @@ async function createAgentSession(
       const raw = TEXT_DECODER.decode(payload).trim();
       if (raw.startsWith('{')) {
         const parsed = JSON.parse(raw);
+        if (parsed?.type === 'client_media_state') {
+          const wasDirectActive = isDirectMediaActive();
+          const ready = Boolean(parsed?.ready);
+          const mode = String(parsed?.mode || '').trim();
+          directClientReadyByParticipant.set(participant.identity, ready && mode === 'direct');
+          const isDirectActiveNow = isDirectMediaActive();
+          if (!wasDirectActive && isDirectActiveNow) {
+            requestInterruption();
+            for (const active of activeInputStreams.values()) {
+              active.reader.cancel().catch(() => undefined);
+            }
+            activeInputStreams.clear();
+          } else if (wasDirectActive && !isDirectActiveNow) {
+            for (const remoteParticipant of room.remoteParticipants.values()) {
+              for (const publication of remoteParticipant.trackPublications.values()) {
+                if (!(publication?.track instanceof RemoteAudioTrack)) continue;
+                startRemoteAudioTranscription(publication.track, remoteParticipant);
+              }
+            }
+          }
+          void publishPauseState();
+          return;
+        }
         if (parsed?.type === 'agent_control') {
           if (!isModeratorParticipant(participant)) return;
           const action = String(parsed?.action || '').trim().toLowerCase();
@@ -1507,13 +1942,16 @@ async function createAgentSession(
 
     const parsed = extractPayload(payload);
     const text = parsed.text;
-    if (parsed.contextUpdated) {
-      console.log(`[agent][${roomName}] updated candidate/role context from data payload`);
+    if (parsed.contextUpdated || parsed.metadataUpdated || parsed.interviewStateUpdated) {
+      console.log(`[agent][${roomName}] updated interview context metadata from data payload`);
       if (isRealtimeDuplexAgent && realtimeWs) {
         sendRealtimeSessionUpdate();
       }
+      if (parsed.interviewStateUpdated && interviewState.currentSkill) {
+        setCurrentSkill(interviewState.currentSkill, interviewState.currentQuestion, interviewState.currentTopic);
+      }
     }
-    if (!text) return;
+    if (!text || isDirectMediaActive()) return;
 
     console.log(`\n[data][${roomName}][${participant.identity}] ${text}`);
     queueUserTurn(text, participant.identity);
@@ -1546,7 +1984,13 @@ async function createAgentSession(
 
   await room.connect(livekitUrl, token);
   console.log(`[agent] connected to room '${roomName}' as '${identity}'`);
+  if (mediaModeConfigured === 'direct') {
+    console.log(`[agent][${roomName}] AGENT_MEDIA_MODE=direct; waiting for client direct media session`);
+  }
   await publishPauseState();
+  const controlStateInterval = setInterval(() => {
+    void publishPauseState();
+  }, 700);
 
   const audioSource = new AudioSource(TARGET_SAMPLE_RATE, TARGET_CHANNELS);
   const localTrack = LocalAudioTrack.createAudioTrack('ai-agent-audio', audioSource);
@@ -1583,6 +2027,7 @@ async function createAgentSession(
   const stop = async (reason = 'manual') => {
     if (stopped || stopping) return;
     stopping = true;
+    clearInterval(controlStateInterval);
     console.log(`[agent] stopping room '${roomName}' (${reason})`);
 
     if (idleTimer) {

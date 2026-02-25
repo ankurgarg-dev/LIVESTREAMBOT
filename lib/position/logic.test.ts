@@ -331,6 +331,82 @@ Preferred Qualifications
       ]),
     );
   });
+
+  it('normalizes noisy required/preferred phrases into canonical skills', () => {
+    const jdText = `
+Required Qualifications
+- Experience with Rails testing frameworks such as RSpec and Minitest
+- Familiarity with Jenkins, GitHub Actions, Docker, and AWS services
+- Strong understanding of AWS security standards including IAM, Security Groups, KMS, and Secrets Manager
+
+Preferred Qualifications
+- Experience with non-relational databases (e.g., MongoDB, Redis)
+`;
+    const res = normalizeAndMap(
+      sampleExtraction({
+        must_haves: [],
+        nice_to_haves: [],
+        tech_stack: [],
+      }),
+      { jdText },
+    );
+
+    expect(res.prefill.must_haves).toEqual(
+      expect.arrayContaining([
+        'RSpec',
+        'Minitest',
+        'Jenkins',
+        'GitHub Actions',
+        'Docker',
+        'AWS',
+      ]),
+    );
+    expect([...res.prefill.must_haves, ...res.prefill.tech_stack]).toEqual(
+      expect.arrayContaining(['IAM', 'Security Groups', 'KMS', 'Secrets Manager']),
+    );
+    expect(res.prefill.nice_to_haves).toEqual(expect.arrayContaining(['MongoDB', 'Redis']));
+    expect(res.prefill.nice_to_haves).not.toEqual(expect.arrayContaining(['Non-relational Databases MongoDB']));
+  });
+
+  it('removes must-have duplicates from nice-to-haves', () => {
+    const res = normalizeAndMap(
+      sampleExtraction({
+        must_haves: ['Docker', 'AWS'],
+        nice_to_haves: ['Docker', 'GitHub Actions'],
+      }),
+      { jdText: '' },
+    );
+
+    expect(res.prefill.must_haves).toEqual(expect.arrayContaining(['Docker', 'AWS']));
+    expect(res.prefill.nice_to_haves).toEqual(expect.arrayContaining(['GitHub Actions']));
+    expect(res.prefill.nice_to_haves).not.toEqual(expect.arrayContaining(['Docker']));
+  });
+
+  it('filters action/task phrases from must-haves in SDET style JDs', () => {
+    const jdText = `
+Requirements
+- Strong programming skills in Java, Python, Swift, or TypeScript (depending on stack).
+- Hands-on experience with test automation tools (e.g., Selenium, Playwright, Appium, XCTest, JUnit).
+Responsibilities
+- Develop and maintain automated test frameworks.
+- Ensure product quality.
+`;
+    const res = normalizeAndMap(
+      sampleExtraction({
+        must_haves: ['Develop', 'Maintain Automated Test Frameworks', 'Ensure Product Quality', 'TypeScript Depending On Stack'],
+        nice_to_haves: [],
+        tech_stack: [],
+      }),
+      { jdText },
+    );
+
+    expect(res.prefill.must_haves).toEqual(
+      expect.arrayContaining(['Java', 'Python', 'Swift', 'TypeScript', 'Selenium', 'Playwright', 'Appium', 'XCTest']),
+    );
+    expect(res.prefill.must_haves).not.toEqual(
+      expect.arrayContaining(['Develop', 'Maintain Automated Test Frameworks', 'Ensure Product Quality', 'TypeScript Depending On Stack']),
+    );
+  });
 });
 
 describe('applyDeterministicMapping', () => {

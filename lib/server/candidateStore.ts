@@ -5,6 +5,7 @@ import path from 'path';
 import type { CanonicalSkillRef } from '@/lib/position/types';
 import { getPrismaClient } from '@/lib/server/prismaClient';
 import type { CvJdDetailedScorecard, CvJdScorecard } from '@/lib/server/cvJdScoring';
+import type { AiScreeningResult } from '@/lib/server/aiScreening';
 
 type UploadedFile = {
   name: string;
@@ -28,8 +29,22 @@ export type CandidateMasterRecord = {
   yearsExperience?: string;
   keySkills?: string[];
   candidateContext?: string;
+  screeningCache?: Record<string, StoredCandidateScreening>;
   cv?: CandidateAssetMeta;
   createdAt: string;
+  updatedAt: string;
+};
+
+export type StoredCandidateScreening = {
+  candidateId: string;
+  positionId: string;
+  deterministicRecommendation: 'strong_fit' | 'fit' | 'borderline' | 'reject';
+  conclusion: string;
+  cvJdScorecard?: CvJdScorecard;
+  detailedScorecard?: CvJdDetailedScorecard;
+  aiScreening?: AiScreeningResult;
+  blendedScore: number;
+  blendedRecommendation: 'strong_fit' | 'fit' | 'borderline' | 'reject';
   updatedAt: string;
 };
 
@@ -51,6 +66,11 @@ export type CandidateApplicationRecord = {
   };
   recommendation: 'strong_fit' | 'fit' | 'borderline' | 'reject';
   conclusion: string;
+  aiScreening?: AiScreeningResult;
+  blendedScore?: number;
+  blendedRecommendation?: 'strong_fit' | 'fit' | 'borderline' | 'reject';
+  roomName?: string;
+  interviewAgentType?: 'classic' | 'realtime_screening';
   createdAt: string;
   updatedAt: string;
 };
@@ -78,6 +98,10 @@ function asCandidateMasterRecord(value: unknown): CandidateMasterRecord | null {
     yearsExperience: String(typed.yearsExperience || '').trim() || undefined,
     keySkills: Array.isArray(typed.keySkills) ? typed.keySkills.map(String).filter(Boolean) : undefined,
     candidateContext: String(typed.candidateContext || '').trim() || undefined,
+    screeningCache:
+      typed.screeningCache && typeof typed.screeningCache === 'object'
+        ? (typed.screeningCache as Record<string, StoredCandidateScreening>)
+        : undefined,
     cv:
       typed.cv && typeof typed.cv === 'object'
         ? {
@@ -95,8 +119,24 @@ function asCandidateMasterRecord(value: unknown): CandidateMasterRecord | null {
 function asCandidateRecord(value: unknown): CandidateApplicationRecord | null {
   if (!value || typeof value !== 'object') return null;
   const typed = value as CandidateApplicationRecord;
+  const id = String(typed.id || '').trim();
+  const roleSlug = String(typed.positionId || 'position').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 18) || 'position';
+  const fallbackRoom = `app-${roleSlug}-${id.slice(0, 8)}`;
+  const aiScore = Number((typed.aiScreening as AiScreeningResult | undefined)?.score || 0);
+  const deterministicScore = Number(typed.cvJdScorecard?.overallScore || 0);
+  const inferredBlendedScore = Math.round(
+    aiScore > 0 ? deterministicScore * 0.5 + aiScore * 0.5 : deterministicScore,
+  );
+  const blendedRecommendation =
+    typed.blendedRecommendation === 'strong_fit' ||
+    typed.blendedRecommendation === 'fit' ||
+    typed.blendedRecommendation === 'borderline'
+      ? typed.blendedRecommendation
+      : typed.recommendation === 'strong_fit' || typed.recommendation === 'fit' || typed.recommendation === 'borderline'
+        ? typed.recommendation
+        : 'reject';
   return {
-    id: String(typed.id || '').trim(),
+    id,
     positionId: String(typed.positionId || '').trim(),
     candidateId: String(typed.candidateId || '').trim() || undefined,
     candidateName: String(typed.candidateName || '').trim(),
@@ -125,6 +165,11 @@ function asCandidateRecord(value: unknown): CandidateApplicationRecord | null {
       ? typed.recommendation
       : 'reject',
     conclusion: String(typed.conclusion || '').trim(),
+    aiScreening: typed.aiScreening as AiScreeningResult | undefined,
+    blendedScore: Number.isFinite(Number(typed.blendedScore)) ? Number(typed.blendedScore) : inferredBlendedScore,
+    blendedRecommendation,
+    roomName: String(typed.roomName || fallbackRoom).trim(),
+    interviewAgentType: typed.interviewAgentType === 'realtime_screening' ? 'realtime_screening' : 'classic',
     createdAt: String(typed.createdAt || ''),
     updatedAt: String(typed.updatedAt || ''),
   };
@@ -143,6 +188,53 @@ export async function getCandidate(id: string): Promise<CandidateMasterRecord | 
   const row = await prisma.candidate.findUnique({ where: { id } });
   const parsed = asCandidateMasterRecord(row?.payload);
   return parsed ?? undefined;
+}
+
+export async function getStoredCandidateScreening(
+  candidateId: string,
+  positionId: string,
+): Promise<StoredCandidateScreening | undefined> {
+  const candidate = await getCandidate(candidateId);
+  if (!candidate?.screeningCache) return undefined;
+  const row = candidate.screeningCache[positionId];
+  if (!row) return undefined;
+  return row;
+}
+
+export async function setStoredCandidateScreening(
+  candidateId: string,
+  positionId: string,
+  screening: Omit<StoredCandidateScreening, 'candidateId' | 'positionId' | 'updatedAt'>,
+): Promise<StoredCandidateScreening> {
+  const prisma = getPrismaClient();
+  const row = await prisma.candidate.findUnique({ where: { id: candidateId } });
+  const current = asCandidateMasterRecord(row?.payload);
+  if (!current) throw new Error('Candidate not found');
+
+  const nextScreening: StoredCandidateScreening = {
+    candidateId,
+    positionId,
+    ...screening,
+    updatedAt: new Date().toISOString(),
+  };
+  const next: CandidateMasterRecord = {
+    ...current,
+    screeningCache: {
+      ...(current.screeningCache || {}),
+      [positionId]: nextScreening,
+    },
+    updatedAt: new Date().toISOString(),
+  };
+  await prisma.candidate.update({
+    where: { id: candidateId },
+    data: {
+      fullName: next.fullName,
+      email: next.email,
+      updatedAt: new Date(next.updatedAt),
+      payload: next,
+    },
+  });
+  return nextScreening;
 }
 
 export async function upsertCandidate(input: {
@@ -236,6 +328,17 @@ export async function listCandidateApplications(positionId?: string): Promise<Ca
     .filter((item: CandidateApplicationRecord | null): item is CandidateApplicationRecord => Boolean(item));
 }
 
+export async function getLatestCandidateApplicationByRoom(
+  roomName: string,
+): Promise<CandidateApplicationRecord | undefined> {
+  const target = String(roomName || '').trim();
+  if (!target) return undefined;
+  const all = await listCandidateApplications();
+  return all
+    .filter((item) => String(item.roomName || '').trim() === target)
+    .sort((a, b) => Date.parse(String(b.updatedAt || '')) - Date.parse(String(a.updatedAt || '')))[0];
+}
+
 export async function getCandidateApplication(id: string): Promise<CandidateApplicationRecord | undefined> {
   const prisma = getPrismaClient();
   const row = await prisma.candidateApplication.findUnique({ where: { id } });
@@ -259,6 +362,11 @@ export async function createCandidateApplication(input: {
   };
   recommendation: 'strong_fit' | 'fit' | 'borderline' | 'reject';
   conclusion: string;
+  aiScreening?: AiScreeningResult;
+  blendedScore?: number;
+  blendedRecommendation?: 'strong_fit' | 'fit' | 'borderline' | 'reject';
+  roomName?: string;
+  interviewAgentType?: 'classic' | 'realtime_screening';
 }): Promise<CandidateApplicationRecord> {
   const prisma = getPrismaClient();
   if (input.candidateId) {
@@ -274,6 +382,8 @@ export async function createCandidateApplication(input: {
     }
   }
   const now = new Date().toISOString();
+  const roleSlug = String(input.positionId || 'position').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 18) || 'position';
+  const roomName = String(input.roomName || '').trim() || `app-${roleSlug}-${randomUUID().slice(0, 8)}`;
   const record: CandidateApplicationRecord = {
     id: randomUUID(),
     positionId: input.positionId,
@@ -287,6 +397,16 @@ export async function createCandidateApplication(input: {
     canonical_skills: input.canonicalSkills,
     recommendation: input.recommendation,
     conclusion: input.conclusion,
+    aiScreening: input.aiScreening,
+    blendedScore: Number.isFinite(Number(input.blendedScore)) ? Number(input.blendedScore) : undefined,
+    blendedRecommendation:
+      input.blendedRecommendation === 'strong_fit' ||
+      input.blendedRecommendation === 'fit' ||
+      input.blendedRecommendation === 'borderline'
+        ? input.blendedRecommendation
+        : undefined,
+    roomName,
+    interviewAgentType: input.interviewAgentType === 'realtime_screening' ? 'realtime_screening' : 'classic',
     createdAt: now,
     updatedAt: now,
   };
@@ -305,6 +425,44 @@ export async function createCandidateApplication(input: {
     },
   });
   return record;
+}
+
+export async function deleteCandidateApplication(id: string): Promise<boolean> {
+  const prisma = getPrismaClient();
+  await prisma.candidateApplication.delete({ where: { id } });
+  return true;
+}
+
+export async function updateCandidateApplicationInterviewSettings(
+  id: string,
+  input: {
+    interviewAgentType?: 'classic' | 'realtime_screening';
+    roomName?: string;
+  },
+): Promise<CandidateApplicationRecord> {
+  const prisma = getPrismaClient();
+  const row = await prisma.candidateApplication.findUnique({ where: { id } });
+  const current = asCandidateRecord(row?.payload);
+  if (!current) throw new Error('Candidate application not found');
+
+  const next: CandidateApplicationRecord = {
+    ...current,
+    interviewAgentType:
+      input.interviewAgentType === 'realtime_screening' ? 'realtime_screening' : current.interviewAgentType || 'classic',
+    roomName: String(input.roomName || '').trim() || current.roomName,
+    updatedAt: new Date().toISOString(),
+  };
+
+  await prisma.candidateApplication.update({
+    where: { id },
+    data: {
+      updatedAt: new Date(next.updatedAt),
+      payload: next,
+      recommendation: next.recommendation,
+      overallScore: Number(next.cvJdScorecard?.overallScore || 0),
+    },
+  });
+  return next;
 }
 
 export async function attachCandidateCv(

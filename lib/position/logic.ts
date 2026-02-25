@@ -14,6 +14,10 @@ const DEFAULT_DURATION = 60;
 const JD_SKILL_PATTERNS: Array<[RegExp, string]> = [
   [/\bpython\b/i, 'Python'],
   [/\bjava\b/i, 'Java'],
+  [/\bruby\b/i, 'Ruby'],
+  [/\bruby on rails\b|\brails\b/i, 'Ruby on Rails'],
+  [/\breact(?:\.js|js)?\b/i, 'React'],
+  [/\bgit\b/i, 'Git'],
   [/\bj2ee\b|\bjee\b/i, 'J2EE'],
   [/\bspring\s*boot\b/i, 'Spring Boot'],
   [/\bobject[-\s]*oriented\b|\bood\b|\boop\b/i, 'Object-Oriented Design'],
@@ -24,7 +28,11 @@ const JD_SKILL_PATTERNS: Array<[RegExp, string]> = [
   [/\bdistributed computing\b|\bdistributed systems?\b/i, 'Distributed Computing'],
   [/\brest(ful)?\b|\brest apis?\b/i, 'REST APIs'],
   [/\bsql\b/i, 'SQL'],
+  [/\bmysql\b/i, 'MySQL'],
+  [/\bpostgres(?:ql)?\b/i, 'PostgreSQL'],
   [/\bnosql\b/i, 'NoSQL'],
+  [/\bmongodb\b/i, 'MongoDB'],
+  [/\bredis\b/i, 'Redis'],
   [/\bmq\b|\bmessage queue\b/i, 'MQ'],
   [/\bkafka\b/i, 'Kafka'],
   [/\bterraform\b|\biac\b|\binfrastructure as code\b/i, 'Terraform'],
@@ -32,6 +40,30 @@ const JD_SKILL_PATTERNS: Array<[RegExp, string]> = [
   [/\bdocker\b/i, 'Docker'],
   [/\bkubernetes\b|\bk8s\b/i, 'Kubernetes'],
   [/\baws\b|\bamazon web services\b|\bcloud\b/i, 'AWS'],
+  [/\bjenkins\b/i, 'Jenkins'],
+  [/\bgithub actions?\b/i, 'GitHub Actions'],
+  [/\bselenium\b/i, 'Selenium'],
+  [/\bplaywright\b/i, 'Playwright'],
+  [/\bappium\b/i, 'Appium'],
+  [/\bxctest\b/i, 'XCTest'],
+  [/\bjunit\b/i, 'JUnit'],
+  [/\bpostman\b/i, 'Postman'],
+  [/\binsomnia\b|\binsomania\b/i, 'Insomnia'],
+  [/\brestassured\b|\brest assured\b/i, 'Rest Assured'],
+  [/\bjmeter\b/i, 'JMeter'],
+  [/\blocust\b/i, 'Locust'],
+  [/\bsdet\b/i, 'SDET'],
+  [/\bsdlc\b/i, 'SDLC'],
+  [/\bqa methodologies?\b/i, 'QA Methodologies'],
+  [/\bapi testing\b/i, 'API Testing'],
+  [/\bui testing\b/i, 'UI Testing'],
+  [/\brspec\b/i, 'RSpec'],
+  [/\bminitest\b/i, 'Minitest'],
+  [/\biam\b|\bidentity and access management\b/i, 'IAM'],
+  [/\bsecurity groups?\b/i, 'Security Groups'],
+  [/\bkms\b|\bkey management service\b/i, 'KMS'],
+  [/\bsecrets manager\b/i, 'Secrets Manager'],
+  [/\belixir\b/i, 'Elixir'],
   [/\bautomation testing\b/i, 'Automation Testing'],
   [/\bunit testing\b|\bunit test\b/i, 'Unit Testing'],
   [/\bintegration testing\b|\bintegration test\b/i, 'Integration Testing'],
@@ -230,7 +262,7 @@ function looksLikeToolOrPlatform(text: string): boolean {
     return true;
   }
   if (
-    /\b(aws|azure|gcp|google cloud platform|lambda|ecs|eks|s3|rds|dynamodb|iam|cloudwatch)\b/i.test(
+    /\b(aws|azure|gcp|google cloud platform|lambda|ecs|eks|s3|rds|dynamodb|iam|cloudwatch|security groups?|kms|secrets manager)\b/i.test(
       normalized,
     )
   ) {
@@ -274,6 +306,14 @@ function normalizeCaseToken(text: string): string {
     TESTNG: 'TestNG',
     XCTEST: 'XCTest',
     GITHUB: 'GitHub',
+    GITHUBACTIONS: 'GitHub Actions',
+    IAM: 'IAM',
+    KMS: 'KMS',
+    RSPEC: 'RSpec',
+    MINITEST: 'Minitest',
+    MONGODB: 'MongoDB',
+    POSTGRESQL: 'PostgreSQL',
+    MYSQL: 'MySQL',
   };
   const upperAcronyms = new Set(['API', 'APIS', 'REST', 'CI', 'CD', 'AWS', 'J2EE', 'MQ', 'SQL', 'NOSQL', 'LLM', 'LLMS', 'GENAI']);
   return text
@@ -314,7 +354,8 @@ function isLikelySkillPhrase(raw: string): boolean {
   if (words.length > 4) return false;
   if (!/[a-z]/i.test(text)) return false;
 
-  const forbidden = /\b(what|you|your|will|need|succeed|title|about|role|opportunity|responsibilit|qualification|required|preferred|must|nice)\b/i;
+  const forbidden =
+    /\b(what|you|your|will|need|succeed|title|about|role|opportunity|responsibilit|qualification|required|preferred|must|nice|develop|maintain|ensure|design and implement|collaborate)\b/i;
   if (forbidden.test(text)) return false;
   return true;
 }
@@ -359,10 +400,11 @@ function cleanupSkillChunk(raw: string): string {
   return String(raw || '')
     .replace(/^[\s\-*•:]+/g, '')
     .replace(
-      /^(solid|strong|good|hands-on)?\s*(professional\s+)?(working\s+knowledge\s+of|knowledge\s+of|experience\s+with|experience\s+in|understanding\s+of|proficiency\s+in|ability\s+to)\s+/i,
+      /^(solid|strong|good|hands-on)?\s*(professional\s+)?(working\s+knowledge\s+of|knowledge\s+of|experience\s+with|experience\s+in|understanding\s+of|proficiency\s+in|ability\s+to|familiarity\s+with)\s+/i,
       '',
     )
     .replace(/\b(such as|like)\b/gi, '')
+    .replace(/\bdepending on stack\b/gi, '')
     .replace(/\b(on any major cloud provider|practices and frameworks|methodologies)\b/gi, '')
     .replace(/[().]/g, ' ')
     .replace(/\s{2,}/g, ' ')
@@ -384,11 +426,18 @@ function extractKnownSkillsFromLine(line: string): string[] {
 }
 
 function cleanupCandidateToken(raw: string): string {
-  return String(raw || '')
+  const stripped = String(raw || '')
     .replace(/^[\s\-*•·▪◦:()"'`[\]{}]+/g, '')
     .replace(/[;:,.!?]+$/g, '')
+    .replace(/^(non[-\s]*relational databases?\s+)/i, '')
+    .replace(/^(databases?\s+)/i, '')
+    .replace(/^(familiarity with\s+)/i, '')
+    .replace(/\s*\(depending on stack\)\s*/gi, ' ')
+    .replace(/\bdepending on stack\b/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
+  if (/^(non[-\s]*relational databases?|databases?)$/i.test(stripped)) return '';
+  return stripped;
 }
 
 function explodeSlashToken(token: string): string[] {
@@ -759,19 +808,23 @@ export function normalizeAndMap(
     roleTitle: opts.roleTitleOverride || extraction.role_title,
     strict: true,
   });
+  const jdNiceSignalKeys = new Set(jdNiceSignals.map((skill) => normalizeLookupKey(skill)));
+  const jdSignalSkillsForMust = jdSignalSkills.filter((skill) => !jdNiceSignalKeys.has(normalizeLookupKey(skill)));
   const mustSeed = hasExplicitJdSections
     ? jdMustSignals.length >= 3
-      ? [...jdMustSignals, ...jdSignalSkills, ...extractedMust]
-      : [...jdMustSignals, ...extractedMust, ...jdSignalSkills]
-    : [...extractedMust, ...jdSignalSkills];
+      ? [...jdMustSignals, ...jdSignalSkillsForMust, ...extractedMust]
+      : [...jdMustSignals, ...extractedMust, ...jdSignalSkillsForMust]
+    : [...extractedMust, ...jdSignalSkillsForMust];
   const preliminaryMust = capStrings(dedupeBySkillKey(mustSeed), 8);
   const hardMust = preliminaryMust.filter((skill) => !isSoftOrGenericSkill(skill));
   const softMust = preliminaryMust.filter((skill) => isSoftOrGenericSkill(skill));
   const hardPool = dedupeBySkillKey([
     ...hardMust,
-    ...normalizeSkills(extraction.tech_stack || [], { jdText: opts.jdText, strict: true }),
+    ...normalizeSkills(extraction.tech_stack || [], { jdText: opts.jdText, strict: true }).filter(
+      (skill) => !jdNiceSignalKeys.has(normalizeLookupKey(skill)),
+    ),
     ...jdMustSignals,
-    ...jdSignalSkills,
+    ...jdSignalSkillsForMust,
   ]).filter((skill) => !isSoftOrGenericSkill(skill));
   const mustRebalanced: string[] = [];
   for (const skill of hardPool) {
@@ -798,7 +851,10 @@ export function normalizeAndMap(
   const niceToHavesSeed = hasExplicitJdSections
     ? [...jdNiceSignals, ...extractedNice]
     : [...extractedNice, ...jdSignalSkills.filter((skill) => !mustSet.has(normalizeLookupKey(skill)))];
-  const niceToHaves = capStrings(dedupeBySkillKey(niceToHavesSeed), 8);
+  const niceToHaves = capStrings(
+    dedupeBySkillKey(niceToHavesSeed).filter((skill) => !mustSet.has(normalizeLookupKey(skill))),
+    8,
+  );
   const techCandidates: TechStackCandidate[] = [
     ...normalizeSkills(extraction.tech_stack || [], { jdText: opts.jdText, strict: true }).map((skill) => ({
       displayText: skill,
