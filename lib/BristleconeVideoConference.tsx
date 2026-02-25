@@ -39,6 +39,7 @@ import { ParticleHaloVisualizer } from '@/visualizer/ParticleHaloVisualizer';
 import { EqualizerVisualizer } from '@/visualizer/EqualizerVisualizer';
 import type { VisualizerState } from '@/visualizer/VoiceVisualizer';
 import { LiquidGlassOrb } from '@/lib/realtime/LiquidGlassOrb';
+import { ShaderAnimation } from '@/components/ui/shader-lines';
 const RECORDING_ENDPOINT = process.env.NEXT_PUBLIC_LK_RECORD_ENDPOINT ?? '/api/record';
 
 export interface BristleconeVideoConferenceProps extends React.HTMLAttributes<HTMLDivElement> {
@@ -541,11 +542,10 @@ function AgentOrbOverlay({
         data-state={realtimeState}
         aria-label="Realtime screening orb"
       >
+        <ShaderAnimation />
         <div className="bc-agent-orb-badge">Realtime Screening</div>
         <div className="bc-rtx-liquid-vignette" />
-        <div className="bc-rtx-liquid-stage">
-          <canvas ref={liquidCanvasRef} className="bc-rtx-liquid-canvas" />
-        </div>
+        <div className="bc-rtx-liquid-stage" />
         <div className="bc-rtx-liquid-noise" />
       </div>
     );
