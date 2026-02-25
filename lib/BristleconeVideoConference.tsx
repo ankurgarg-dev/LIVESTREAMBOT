@@ -625,13 +625,11 @@ function FloatingAgentOrb({
   paused = false,
   agentTransportMode = 'unknown',
   agentAssistantState = 'unknown',
-  keepVisible = false,
 }: {
   trackedParticipantIdentities: Set<string>;
   paused?: boolean;
   agentTransportMode?: AgentTransportMode;
   agentAssistantState?: AgentAssistantState;
-  keepVisible?: boolean;
 }) {
   const { localParticipant } = useLocalParticipant();
   const remoteParticipants = useRemoteParticipants({
@@ -656,39 +654,7 @@ function FloatingAgentOrb({
     return undefined;
   }, [remoteParticipants, trackedParticipantIdentities]);
 
-  if (!fallbackAgent) {
-    const shouldShowDirectFallback =
-      keepVisible || agentTransportMode === 'direct_client' || agentTransportMode === 'realtime_ws';
-    if (!shouldShowDirectFallback) return null;
-
-    const syntheticState = paused
-      ? 'paused'
-      : agentAssistantState === 'speaking'
-        ? 'speaking'
-        : agentAssistantState === 'thinking'
-          ? 'processing'
-          : 'idle';
-
-    return (
-      <div className="bc-agent-floating-shell" aria-label="AI audio visualizer fallback">
-        <div className="bc-rtx-orb" data-state={syntheticState}>
-          <div className="bc-agent-orb-badge">Realtime Screening</div>
-          <div className="bc-rtx-vignette" />
-          <div className="bc-rtx-layer l1" />
-          <div className="bc-rtx-layer l2" />
-          <div className="bc-rtx-layer l3" />
-          <div className="bc-rtx-layer l4" />
-          <div className="bc-rtx-aura" />
-          <div className="bc-rtx-kernel" />
-          <div className="bc-rtx-ring" />
-          <div className="bc-rtx-flash" />
-          <div className="bc-rtx-mic-indicator" />
-          <div className="bc-rtx-noise" />
-        </div>
-        <div className="bc-agent-floating-label">AI Interview Assistant</div>
-      </div>
-    );
-  }
+  if (!fallbackAgent) return null;
 
   return (
     <div className="bc-agent-floating-shell" aria-label="AI audio visualizer fallback">
@@ -753,7 +719,6 @@ export function BristleconeVideoConference({
   const [agentFullDuplex, setAgentFullDuplex] = React.useState(false);
   const [agentMediaModeEffective, setAgentMediaModeEffective] = React.useState<AgentMediaMode>('unknown');
   const [agentMediaModeConfigured, setAgentMediaModeConfigured] = React.useState<AgentMediaMode>('unknown');
-  const [stickyRealtimeUi, setStickyRealtimeUi] = React.useState(false);
   const [roomDebugEnabled, setRoomDebugEnabled] = React.useState(false);
 
   React.useEffect(() => {
@@ -854,12 +819,6 @@ export function BristleconeVideoConference({
     };
   }, [room, roomDebugEnabled]);
 
-  React.useEffect(() => {
-    if (agentTransportMode === 'direct_client' || agentTransportMode === 'realtime_ws') {
-      setStickyRealtimeUi(true);
-    }
-  }, [agentTransportMode]);
-
   const trackSnapshot = React.useMemo(
     () =>
       tracks.map((track) => ({
@@ -876,7 +835,6 @@ export function BristleconeVideoConference({
       trackCount: trackSnapshot.length,
       trackSnapshot,
       trackedParticipantCount: trackedParticipantIdentities.size,
-      stickyRealtimeUi,
       isInterviewPaused,
       agentTransportMode,
       agentMediaModeEffective,
@@ -886,7 +844,6 @@ export function BristleconeVideoConference({
     roomDebugEnabled,
     trackSnapshot,
     trackedParticipantIdentities,
-    stickyRealtimeUi,
     isInterviewPaused,
     agentTransportMode,
     agentMediaModeEffective,
@@ -1014,7 +971,6 @@ export function BristleconeVideoConference({
             paused={isInterviewPaused}
             agentTransportMode={agentTransportMode}
             agentAssistantState={agentAssistantState}
-            keepVisible={stickyRealtimeUi}
           />
         </div>
 
