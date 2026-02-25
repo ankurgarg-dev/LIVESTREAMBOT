@@ -632,7 +632,39 @@ function FloatingAgentOrb({
     return undefined;
   }, [remoteParticipants, trackedParticipantIdentities]);
 
-  if (!fallbackAgent) return null;
+  if (!fallbackAgent) {
+    const shouldShowDirectFallback =
+      agentTransportMode === 'direct_client' || agentTransportMode === 'realtime_ws';
+    if (!shouldShowDirectFallback) return null;
+
+    const syntheticState = paused
+      ? 'paused'
+      : agentAssistantState === 'speaking'
+        ? 'speaking'
+        : agentAssistantState === 'thinking'
+          ? 'processing'
+          : 'idle';
+
+    return (
+      <div className="bc-agent-floating-shell" aria-label="AI audio visualizer fallback">
+        <div className="bc-rtx-orb" data-state={syntheticState}>
+          <div className="bc-agent-orb-badge">Realtime Screening</div>
+          <div className="bc-rtx-vignette" />
+          <div className="bc-rtx-layer l1" />
+          <div className="bc-rtx-layer l2" />
+          <div className="bc-rtx-layer l3" />
+          <div className="bc-rtx-layer l4" />
+          <div className="bc-rtx-aura" />
+          <div className="bc-rtx-kernel" />
+          <div className="bc-rtx-ring" />
+          <div className="bc-rtx-flash" />
+          <div className="bc-rtx-mic-indicator" />
+          <div className="bc-rtx-noise" />
+        </div>
+        <div className="bc-agent-floating-label">AI Interview Assistant</div>
+      </div>
+    );
+  }
 
   return (
     <div className="bc-agent-floating-shell" aria-label="AI audio visualizer fallback">
