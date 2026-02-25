@@ -12,7 +12,6 @@ import {
   LocalUserChoices,
   PreJoin,
   RoomContext,
-  useIsRecording,
 } from '@livekit/components-react';
 import {
   ConnectionState,
@@ -872,7 +871,6 @@ function VideoConferenceComponent(props: {
   return (
     <div className="lk-room-container">
       <RoomContext.Provider value={room}>
-        <InRoomStatusHud room={room} />
         <KeyboardShortcuts />
         <BristleconeVideoConference
           chatMessageFormatter={formatChatMessageLinks}
@@ -882,91 +880,6 @@ function VideoConferenceComponent(props: {
         <DebugMode />
         <RecordingIndicator />
       </RoomContext.Provider>
-    </div>
-  );
-}
-
-function InRoomStatusHud(props: { room: Room }) {
-  const isRecording = useIsRecording();
-  const [localSpeaking, setLocalSpeaking] = React.useState(false);
-  const [assistantSpeaking, setAssistantSpeaking] = React.useState(false);
-  const [assistantThinking, setAssistantThinking] = React.useState(false);
-
-  const hasRecentUserSpeechRef = React.useRef(false);
-  const wasLocalSpeakingRef = React.useRef(false);
-  const thinkTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  React.useEffect(() => {
-    const clearThinkTimeout = () => {
-      if (!thinkTimeoutRef.current) return;
-      clearTimeout(thinkTimeoutRef.current);
-      thinkTimeoutRef.current = null;
-    };
-
-    const onActiveSpeakersChanged = (speakers: Array<{ identity: string }>) => {
-      const localIdentity = props.room.localParticipant.identity;
-      const localIsNowSpeaking = speakers.some((p) => p.identity === localIdentity);
-      const botIsNowSpeaking = speakers.some((p) => {
-        const id = p.identity.toLowerCase();
-        return id.includes('agent') || id.includes('assistant') || id.includes('ai');
-      });
-
-      setLocalSpeaking(localIsNowSpeaking);
-      setAssistantSpeaking(botIsNowSpeaking);
-
-      if (localIsNowSpeaking) {
-        hasRecentUserSpeechRef.current = true;
-        clearThinkTimeout();
-        setAssistantThinking(false);
-      }
-
-      if (wasLocalSpeakingRef.current && !localIsNowSpeaking) {
-        if (!botIsNowSpeaking && hasRecentUserSpeechRef.current) {
-          setAssistantThinking(true);
-          clearThinkTimeout();
-          thinkTimeoutRef.current = setTimeout(() => {
-            setAssistantThinking(false);
-          }, 15000);
-        }
-      }
-
-      if (botIsNowSpeaking) {
-        setAssistantThinking(false);
-        clearThinkTimeout();
-      }
-
-      wasLocalSpeakingRef.current = localIsNowSpeaking;
-    };
-
-    props.room.on(RoomEvent.ActiveSpeakersChanged, onActiveSpeakersChanged);
-    return () => {
-      clearThinkTimeout();
-      props.room.off(RoomEvent.ActiveSpeakersChanged, onActiveSpeakersChanged);
-    };
-  }, [props.room]);
-
-  const aiState = assistantSpeaking ? 'speaking' : assistantThinking ? 'thinking' : 'idle';
-  const aiLabel =
-    aiState === 'speaking' ? 'AI speaking' : aiState === 'thinking' ? 'AI processing...' : 'AI ready';
-
-  return (
-    <div className="bc-status-hud" aria-live="polite">
-      {isRecording ? (
-        <div className="bc-record-live" role="status" aria-live="polite">
-          <span className="bc-dot is-recording" />
-          <span>REC</span>
-        </div>
-      ) : null}
-      <div className="bc-status-stack">
-        <div className={`bc-status-pill ${localSpeaking ? 'is-speaking' : ''}`}>
-          <span className="bc-dot" />
-          <span>{localSpeaking ? 'You are speaking' : 'Mic on'}</span>
-        </div>
-        <div className={`bc-status-pill ai ${aiState === 'speaking' ? 'is-speaking' : ''}`}>
-          <span className={`bc-dot ${aiState === 'thinking' ? 'is-thinking' : ''}`} />
-          <span>{aiLabel}</span>
-        </div>
-      </div>
     </div>
   );
 }

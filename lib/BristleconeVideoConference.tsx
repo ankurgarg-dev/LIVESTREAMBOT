@@ -536,16 +536,71 @@ function AgentOrbOverlay({
   }, [agentAssistantState, agentTransportMode, interruptedActive, isSpeaking, localIsSpeaking, micUnavailable, paused, processingActive, variant]);
 
   if (variant === 'realtime_screening') {
+    const userState = localIsSpeaking ? 'speaking' : 'listening';
+    const userStateLongLabel = localIsSpeaking ? 'Speaking' : 'Listening';
+    const userStateShortLabel = localIsSpeaking ? 'Speak' : 'Listen';
+
+    let aiState: 'speaking' | 'thinking' | 'listening' | 'silent' | 'reconnecting' | 'paused' = 'listening';
+    if (realtimeState === 'paused') {
+      aiState = 'paused';
+    } else if (realtimeState === 'reconnecting' || agentTransportMode === 'unknown') {
+      aiState = 'reconnecting';
+    } else if (agentAssistantState === 'speaking' || isSpeaking || realtimeState === 'speaking') {
+      aiState = 'speaking';
+    } else if (realtimeState === 'processing' || agentAssistantState === 'thinking') {
+      aiState = 'thinking';
+    } else if (realtimeState === 'idle' && !localIsSpeaking) {
+      aiState = 'silent';
+    }
+
+    const aiStateLongLabel =
+      aiState === 'speaking'
+        ? 'Speaking'
+        : aiState === 'thinking'
+          ? 'Thinking'
+          : aiState === 'silent'
+            ? 'Silent'
+          : aiState === 'reconnecting'
+            ? 'Reconnecting'
+            : aiState === 'paused'
+              ? 'Paused'
+              : 'Listening';
+    const aiStateShortLabel =
+      aiState === 'speaking'
+        ? 'Speak'
+        : aiState === 'thinking'
+          ? 'Think'
+          : aiState === 'silent'
+            ? 'Silent'
+          : aiState === 'reconnecting'
+            ? 'Reconnect'
+            : aiState === 'paused'
+              ? 'Paused'
+              : 'Listen';
+
     return (
       <div
         className={`bc-rtx-liquid-orb ${paused ? 'is-paused' : ''}`}
         data-state={realtimeState}
+        data-ai-state={aiState}
         aria-label="Realtime screening orb"
       >
         <div className="bc-rtx-liquid-stage">
           <ShaderAnimation className="bc-shader-surface" />
         </div>
         <div className="bc-agent-orb-badge">Realtime Screening</div>
+        <div className="bc-rtx-inline-status" aria-live="polite">
+          <div className={`bc-rtx-status-pill is-${userState}`} aria-label={`You: ${userStateLongLabel}`}>
+            <span className="bc-rtx-status-role">You</span>
+            <span className="bc-rtx-status-value bc-rtx-status-value--long">{userStateLongLabel}</span>
+            <span className="bc-rtx-status-value bc-rtx-status-value--short">{userStateShortLabel}</span>
+          </div>
+          <div className={`bc-rtx-status-pill is-${aiState}`} aria-label={`AI: ${aiStateLongLabel}`}>
+            <span className="bc-rtx-status-role">AI</span>
+            <span className="bc-rtx-status-value bc-rtx-status-value--long">{aiStateLongLabel}</span>
+            <span className="bc-rtx-status-value bc-rtx-status-value--short">{aiStateShortLabel}</span>
+          </div>
+        </div>
         <div className="bc-rtx-liquid-vignette" />
         <div className="bc-rtx-liquid-noise" />
       </div>
