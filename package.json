@@ -15,12 +15,14 @@
     "format:write": "prettier --write \"**/*.{ts,tsx,md,json}\""
   },
   "dependencies": {
-    "@prisma/client": "^6.16.1",
     "@datadog/browser-logs": "^5.23.3",
     "@livekit/components-react": "2.9.19",
     "@livekit/components-styles": "1.2.0",
     "@livekit/krisp-noise-filter": "0.3.4",
     "@livekit/track-processors": "^0.7.0",
+    "@prisma/client": "^6.16.1",
+    "@react-three/drei": "^9.122.0",
+    "@react-three/fiber": "^8.18.0",
     "livekit-client": "2.17.1",
     "livekit-server-sdk": "2.15.0",
     "next": "15.2.8",
@@ -32,14 +34,14 @@
     "tinykeys": "^3.0.0"
   },
   "devDependencies": {
-    "@types/three": "^0.180.0",
     "@types/node": "22.19.1",
     "@types/react": "18.3.27",
     "@types/react-dom": "18.3.7",
+    "@types/three": "^0.180.0",
     "eslint": "9.39.1",
     "eslint-config-next": "15.5.6",
-    "prisma": "^6.16.1",
     "prettier": "3.7.3",
+    "prisma": "^6.16.1",
     "source-map-loader": "^5.0.0",
     "typescript": "5.9.3",
     "vitest": "^3.2.4"
