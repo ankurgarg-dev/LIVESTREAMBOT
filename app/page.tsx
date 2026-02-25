@@ -1052,9 +1052,14 @@ export default function Page() {
       if (!response.ok || !json?.ok) {
         throw new Error(json?.error || 'Failed to create application');
       }
+      const created = (json?.candidate || null) as ApplicationRecord | null;
+      if (created?.id) {
+        setApplications((prev) => [created, ...prev.filter((item) => item.id !== created.id)]);
+      }
+      switchTab('applications');
       setSuccess('Application created from stored screening.');
       setCandidateScreeningById((prev) => ({ ...prev, [candidateId]: undefined }));
-      await loadData();
+      void loadData();
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : 'Failed to create application');
     } finally {
