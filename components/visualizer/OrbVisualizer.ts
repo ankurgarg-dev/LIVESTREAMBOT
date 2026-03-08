@@ -260,6 +260,11 @@ export class OrbVisualizer implements VoiceVisualizer {
       targetGlow = 0.72 + Math.sin(elapsed * 1.4) * 0.1;
       targetDisplacement = 0.012;
       colorMix = (Math.sin(elapsed * 1.5) + 1) * 0.5;
+    } else if (this.state === 'listening') {
+      targetScale = 1.0 + this.smoothedAmplitude * 0.09 + Math.sin(elapsed * 1.6) * 0.015;
+      targetGlow = 0.58 + this.smoothedAmplitude * 0.55;
+      targetDisplacement = 0.008 + this.smoothedAmplitude * 0.06;
+      colorMix = 0.08 + this.smoothedAmplitude * 0.2;
     } else {
       targetScale = 1.01 + this.smoothedAmplitude * 0.22;
       targetGlow = 0.7 + this.smoothedAmplitude * 1.55;

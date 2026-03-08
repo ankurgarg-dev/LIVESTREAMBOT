@@ -68,7 +68,7 @@ export class VisualizerManager {
     }
   }
 
-  setState(state: 'idle' | 'thinking' | 'speaking'): void {
+  setState(state: 'idle' | 'thinking' | 'listening' | 'speaking'): void {
     this.current?.setState(state);
   }
 
@@ -80,4 +80,3 @@ export class VisualizerManager {
     this.currentStyle = undefined;
   }
 }
-

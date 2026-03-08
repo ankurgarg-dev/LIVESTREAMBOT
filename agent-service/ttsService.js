@@ -46,61 +46,82 @@ class TTSService {
     this.voice = voice;
     this.inSampleRate = inSampleRate;
     this.outSampleRate = outSampleRate;
+    this.requestTimeoutMs = Math.max(3000, Number(process.env.TTS_REQUEST_TIMEOUT_MS || 45000));
+    this.maxRetries = Math.max(0, Number(process.env.TTS_REQUEST_RETRIES || 1));
   }
 
   async *streamPcm48kForText(text) {
-    const response = await fetch('https://api.openai.com/v1/audio/speech', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: this.model,
-        voice: this.voice,
-        input: text,
-        response_format: 'pcm',
-      }),
-    });
+    const input = String(text || '').trim();
+    if (!input) return;
 
-    if (!response.ok) {
-      const errText = await response.text().catch(() => '');
-      throw new Error(`TTS request failed (${response.status}): ${errText}`);
-    }
+    for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
+      const abortController = new AbortController();
+      const timer = setTimeout(() => abortController.abort(), this.requestTimeoutMs);
+      try {
+        const response = await fetch('https://api.openai.com/v1/audio/speech', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${this.apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: this.model,
+            voice: this.voice,
+            input,
+            response_format: 'pcm',
+          }),
+          signal: abortController.signal,
+        });
 
-    if (!response.body) {
-      throw new Error('TTS response did not include a stream body');
-    }
+        if (!response.ok) {
+          const errText = await response.text().catch(() => '');
+          throw new Error(`TTS request failed (${response.status}): ${errText}`);
+        }
 
-    const reader = response.body.getReader();
-    let pendingByte = null;
+        if (!response.body) {
+          throw new Error('TTS response did not include a stream body');
+        }
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!value || value.length === 0) continue;
+        const reader = response.body.getReader();
+        let pendingByte = null;
 
-      let chunk = Buffer.from(value);
-      if (pendingByte !== null) {
-        chunk = Buffer.concat([Buffer.from([pendingByte]), chunk]);
-        pendingByte = null;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!value || value.length === 0) continue;
+
+          let chunk = Buffer.from(value);
+          if (pendingByte !== null) {
+            chunk = Buffer.concat([Buffer.from([pendingByte]), chunk]);
+            pendingByte = null;
+          }
+
+          if (chunk.length % 2 === 1) {
+            pendingByte = chunk[chunk.length - 1];
+            chunk = chunk.subarray(0, chunk.length - 1);
+          }
+
+          if (chunk.length === 0) continue;
+
+          const inSamples = int16ArrayFromBufferLE(chunk);
+          const outSamples = resampleInt16Mono(inSamples, this.inSampleRate, this.outSampleRate);
+          yield int16ArrayToBufferLE(outSamples);
+        }
+        clearTimeout(timer);
+        return;
+      } catch (error) {
+        clearTimeout(timer);
+        const isLastAttempt = attempt >= this.maxRetries;
+        console.warn(
+          `[tts] request failed (attempt ${attempt + 1}/${this.maxRetries + 1}): ${error?.message || error}`,
+        );
+        if (isLastAttempt) throw error;
       }
-
-      if (chunk.length % 2 === 1) {
-        pendingByte = chunk[chunk.length - 1];
-        chunk = chunk.subarray(0, chunk.length - 1);
-      }
-
-      if (chunk.length === 0) continue;
-
-      const inSamples = int16ArrayFromBufferLE(chunk);
-      const outSamples = resampleInt16Mono(inSamples, this.inSampleRate, this.outSampleRate);
-      yield int16ArrayToBufferLE(outSamples);
     }
   }
 
   static _splitAtBoundary(textBuffer) {
-    const match = textBuffer.match(/[.!?\n]/);
+    const match = textBuffer.match(/[.!?\n,;]/);
     if (!match || match.index === undefined) {
       return null;
     }
@@ -114,6 +135,7 @@ class TTSService {
 
   async *streamFromLlmText(llmDeltaStream) {
     let textBuffer = '';
+    const softFlushChars = 90;
 
     for await (const delta of llmDeltaStream) {
       textBuffer += delta;
@@ -123,14 +145,35 @@ class TTSService {
         if (!split) break;
         textBuffer = split.rest;
         if (!split.sentence) continue;
+        try {
+          yield* this.streamPcm48kForText(split.sentence);
+        } catch (error) {
+          console.warn('[tts] dropped sentence after retries:', error?.message || error);
+        }
+      }
 
-        yield* this.streamPcm48kForText(split.sentence);
+      // Soft-flush long partials to reduce perceived silence.
+      if (textBuffer.length >= softFlushChars) {
+        const cut = textBuffer.lastIndexOf(' ');
+        const left = (cut > 20 ? textBuffer.slice(0, cut) : textBuffer).trim();
+        textBuffer = cut > 20 ? textBuffer.slice(cut + 1) : '';
+        if (left) {
+          try {
+            yield* this.streamPcm48kForText(left);
+          } catch (error) {
+            console.warn('[tts] dropped partial chunk after retries:', error?.message || error);
+          }
+        }
       }
     }
 
     const finalText = textBuffer.trim();
     if (finalText) {
-      yield* this.streamPcm48kForText(finalText);
+      try {
+        yield* this.streamPcm48kForText(finalText);
+      } catch (error) {
+        console.warn('[tts] dropped final chunk after retries:', error?.message || error);
+      }
     }
   }
 }

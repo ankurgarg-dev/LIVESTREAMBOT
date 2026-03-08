@@ -29,9 +29,9 @@ function sanitizePathFragment(value: string): string {
 }
 
 function buildS3Upload(): S3Upload {
-  const bucket = process.env.RECORDING_S3_BUCKET ?? process.env.S3_BUCKET;
-  const region = process.env.RECORDING_S3_REGION ?? process.env.S3_REGION;
-  const endpoint = process.env.RECORDING_S3_ENDPOINT ?? process.env.S3_ENDPOINT;
+  const bucket = getRecordingBucket();
+  const region = getRecordingRegion();
+  const endpoint = getRecordingEndpoint();
   const accessKey =
     process.env.RECORDING_S3_ACCESS_KEY_ID ??
     process.env.S3_KEY_ID ??
@@ -54,6 +54,18 @@ function buildS3Upload(): S3Upload {
     region,
     bucket,
   });
+}
+
+function getRecordingBucket(): string | undefined {
+  return process.env.RECORDING_S3_BUCKET ?? process.env.S3_BUCKET;
+}
+
+function getRecordingRegion(): string | undefined {
+  return process.env.RECORDING_S3_REGION ?? process.env.S3_REGION;
+}
+
+function getRecordingEndpoint(): string | undefined {
+  return process.env.RECORDING_S3_ENDPOINT ?? process.env.S3_ENDPOINT;
 }
 
 function buildFilePath(roomName: string): string {
@@ -115,4 +127,45 @@ export async function stopRoomRecording(roomName: string): Promise<number> {
   if (active.length === 0) return 0;
   await Promise.all(active.map((info) => egressClient.stopEgress(info.egressId)));
   return active.length;
+}
+
+export function extractEgressFilepath(info: EgressInfo): string | null {
+  const raw =
+    (info as unknown as { file?: { filepath?: string } }).file?.filepath ??
+    (info as unknown as { filepath?: string }).filepath ??
+    (Array.isArray((info as unknown as { fileResults?: Array<{ filename?: string }> }).fileResults)
+      ? (info as unknown as { fileResults?: Array<{ filename?: string }> }).fileResults?.[0]?.filename
+      : undefined);
+  const filepath = String(raw || '').trim();
+  return filepath || null;
+}
+
+export function buildRecordingPublicUrl(filepath: string): string | null {
+  const normalizedPath = String(filepath || '').replace(/^\/+/, '');
+  if (!normalizedPath) return null;
+
+  const pathSegments = normalizedPath
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+
+  const directBase = String(process.env.RECORDING_PUBLIC_BASE_URL || '').trim();
+  if (directBase) {
+    return `${directBase.replace(/\/+$/, '')}/${pathSegments}`;
+  }
+
+  const bucket = getRecordingBucket();
+  if (!bucket) return null;
+
+  const endpoint = String(getRecordingEndpoint() || '').trim();
+  if (endpoint) {
+    const base = endpoint.replace(/\/+$/, '');
+    return `${base}/${encodeURIComponent(bucket)}/${pathSegments}`;
+  }
+
+  const region = String(getRecordingRegion() || '').trim();
+  if (region && region !== 'us-east-1') {
+    return `https://${bucket}.s3.${region}.amazonaws.com/${pathSegments}`;
+  }
+  return `https://${bucket}.s3.amazonaws.com/${pathSegments}`;
 }

@@ -6,13 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const readline = require('node:readline');
 const OpenAI = require('openai');
-let OpenAIRealtimeWS = null;
-try {
-  ({ OpenAIRealtimeWS } = require('openai/beta/realtime/ws'));
-} catch {
-  OpenAIRealtimeWS = null;
-}
-const { AccessToken } = require('livekit-server-sdk');
+const { AccessToken, RoomServiceClient } = require('livekit-server-sdk');
 const {
   AudioSource,
   AudioStream,
@@ -26,7 +20,7 @@ const {
 } = require('@livekit/rtc-node');
 
 const { LLMService } = require('./llmService');
-const { TTSService, resampleInt16Mono } = require('./ttsService');
+const { TTSService } = require('./ttsService');
 const {
   getDefaultClassicInterviewPrompt,
   getDefaultRealtimeScreeningPrompt,
@@ -62,16 +56,12 @@ const AUDIO_PUMP_MAX_QUEUE_SECONDS = getNumberEnv('AUDIO_PUMP_MAX_QUEUE_SECONDS'
   min: 0.1,
   max: 5,
 });
-const REALTIME_IO_SAMPLE_RATE = 24000;
 const TEXT_DECODER = new TextDecoder();
 const STT_SAMPLE_RATE = 16000;
 const STT_CHANNELS = 1;
 const BOT_IDENTITY_BASE = (process.env.BOT_IDENTITY || 'bristlecone-ai-agent').trim();
 const BOT_NAME = (process.env.BOT_NAME || 'Bristlecone AI Agent').trim();
 const ROOM_IDLE_TIMEOUT_MS = Math.max(30000, Number(process.env.AGENT_ROOM_IDLE_TIMEOUT_MS || 180000));
-const ENABLE_BARGE_IN = process.env.ENABLE_BARGE_IN !== 'false';
-const ENABLE_FULL_DUPLEX = process.env.ENABLE_FULL_DUPLEX !== 'false';
-const AGENT_MEDIA_MODE = String(process.env.AGENT_MEDIA_MODE || 'direct').trim().toLowerCase() === 'relay' ? 'relay' : 'direct';
 const EMPTY_ROOM_FINALIZE_DELAY_MS = Math.max(
   3000,
   Number(process.env.EMPTY_ROOM_FINALIZE_DELAY_MS || 8000),
@@ -79,6 +69,10 @@ const EMPTY_ROOM_FINALIZE_DELAY_MS = Math.max(
 const POST_JOIN_EMPTY_ROOM_FINALIZE_DELAY_MS = Math.max(
   EMPTY_ROOM_FINALIZE_DELAY_MS,
   Number(process.env.POST_JOIN_EMPTY_ROOM_FINALIZE_DELAY_MS || 30000),
+);
+const RECONNECT_GRACE_MS = Math.max(
+  POST_JOIN_EMPTY_ROOM_FINALIZE_DELAY_MS,
+  Number(process.env.AGENT_RECONNECT_GRACE_MS || 120000),
 );
 const INTERVIEW_MODE = process.env.AGENT_INTERVIEW_MODE !== 'false';
 const AGENT_TYPE_CLASSIC = 'classic';
@@ -123,10 +117,21 @@ const STT_GRACE_MS = getNumberEnv('STT_GRACE_MS', DEFAULT_STT_GRACE_MS, {
   min: 0,
   max: 10000,
 });
-const REALTIME_SERVER_VAD_THRESHOLD = getNumberEnv('REALTIME_SERVER_VAD_THRESHOLD', 0.45, {
-  min: 0.1,
-  max: 0.95,
+const BARGE_IN_MIN_WORDS = getNumberEnv('BARGE_IN_MIN_WORDS', 4, {
+  min: 1,
+  max: 20,
 });
+const BARGE_IN_MIN_CHARS = getNumberEnv('BARGE_IN_MIN_CHARS', 20, {
+  min: 5,
+  max: 200,
+});
+const ALLOW_CLASSIC_BARGE_IN_DURING_SPEAKING =
+  String(process.env.ALLOW_CLASSIC_BARGE_IN_DURING_SPEAKING || '').trim().toLowerCase() === 'true';
+const AGENT_PROGRESSIVE_TTS =
+  String(process.env.AGENT_PROGRESSIVE_TTS || '').trim().toLowerCase() === 'true';
+const BOOTSTRAP_AUDIO_PROBE =
+  String(process.env.BOOTSTRAP_AUDIO_PROBE || '').trim().toLowerCase() === 'true';
+const FINAL_TRANSCRIPT_MAX_CHARS = 500000;
 
 class PcmAudioPump {
   constructor(audioSource, { frameSamples = FRAME_SAMPLES, maxQueueSeconds = 3 } = {}) {
@@ -233,16 +238,6 @@ function int16ToBufferLE(int16) {
   const out = Buffer.alloc(int16.length * 2);
   for (let i = 0; i < int16.length; i += 1) {
     out.writeInt16LE(int16[i], i * 2);
-  }
-  return out;
-}
-
-function bufferLeToInt16(buffer) {
-  if (!buffer || buffer.length === 0) return new Int16Array(0);
-  const sampleCount = Math.floor(buffer.length / 2);
-  const out = new Int16Array(sampleCount);
-  for (let i = 0; i < sampleCount; i += 1) {
-    out[i] = buffer.readInt16LE(i * 2);
   }
   return out;
 }
@@ -487,6 +482,44 @@ function getAppBaseUrls() {
   return Array.from(new Set(all));
 }
 
+async function evictStaleBotParticipants(roomName, keepIdentity = '') {
+  const livekitHttpUrl = toHttpUrl(process.env.LIVEKIT_URL || '');
+  const apiKey = String(process.env.LIVEKIT_API_KEY || '').trim();
+  const apiSecret = String(process.env.LIVEKIT_API_SECRET || '').trim();
+  if (!livekitHttpUrl || !apiKey || !apiSecret) return;
+  if (process.env.AGENT_EVICT_STALE_BOTS === 'false') return;
+
+  const room = String(roomName || '').trim();
+  if (!room) return;
+  const keep = String(keepIdentity || '').trim();
+
+  try {
+    const client = new RoomServiceClient(livekitHttpUrl, apiKey, apiSecret);
+    const participants = await client.listParticipants(room);
+    const botIdentities = participants
+      .map((p) => String(p.identity || '').trim())
+      .filter((identity) => identity && isBotIdentity(identity));
+
+    for (const identity of botIdentities) {
+      if (keep && identity === keep) continue;
+      try {
+        await client.removeParticipant(room, identity);
+        console.log(`[agent-manager] evicted stale bot '${identity}' from '${room}'`);
+      } catch (err) {
+        console.warn(
+          `[agent-manager] failed to evict stale bot '${identity}' from '${room}':`,
+          err?.message || err,
+        );
+      }
+    }
+  } catch (err) {
+    console.warn(
+      `[agent-manager] failed to list participants for stale bot cleanup in '${room}':`,
+      err?.message || err,
+    );
+  }
+}
+
 function normalizeRecommendation(value) {
   const allowed = new Set(['strong_hire', 'hire', 'hold', 'no_hire']);
   return allowed.has(String(value || '').trim()) ? String(value).trim() : 'hold';
@@ -569,6 +602,14 @@ function extractQuestionFromText(text) {
   return '';
 }
 
+function toShortSpeechText(text, maxWords = 8) {
+  const cleaned = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!cleaned) return '';
+  const firstSentence = cleaned.split(/(?<=[.!?])\s+/)[0] || cleaned;
+  const words = firstSentence.split(' ').filter(Boolean);
+  return words.slice(0, Math.max(1, maxWords)).join(' ');
+}
+
 function includesAny(normalizedText, phrases) {
   return phrases.some((phrase) => normalizedText.includes(phrase));
 }
@@ -583,17 +624,7 @@ function findMatchingSkillName(normalizedText, skills) {
 }
 
 function parseVoiceControls(normalizedText) {
-  const controls = [];
-  if (/\b(slower|slow down)\b/.test(normalizedText)) controls.push('speak slower');
-  if (/\b(faster|speed up)\b/.test(normalizedText)) controls.push('speak faster');
-  if (/\b(louder|increase volume|speak up)\b/.test(normalizedText)) controls.push('speak louder');
-  if (/\b(softer|quieter|lower volume)\b/.test(normalizedText)) controls.push('speak softer');
-  if (/\b(accent|british|american|indian|australian)\b/.test(normalizedText)) controls.push('adjust accent');
-  if (/\b(repeat|say that again)\b/.test(normalizedText)) controls.push('repeat');
-  if (/\b(rephrase|paraphrase)\b/.test(normalizedText)) controls.push('rephrase');
-  if (/\b(pause)\b/.test(normalizedText)) controls.push('pause');
-  if (/\b(resume|continue)\b/.test(normalizedText)) controls.push('resume');
-  return controls;
+  return [];
 }
 
 function classifyUtterance(text, context = {}) {
@@ -658,38 +689,83 @@ function getAgentSettingsPath() {
   return path.join(baseDir, 'agent-settings.json');
 }
 
+function readNumberSetting(value, fallback, min, max) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
+function buildDefaultPromptTemplates() {
+  return {
+    classicPrompt: getDefaultClassicInterviewPrompt(),
+    realtimePrompt: getDefaultRealtimeScreeningPrompt(),
+    screeningMaxMinutes: SCREENING_MAX_MINUTES,
+    sttVadRmsThreshold: STT_VAD_RMS_THRESHOLD,
+    sttMinSpeechMs: STT_MIN_SPEECH_MS,
+    sttMaxSilenceMs: STT_MAX_SILENCE_MS,
+    sttMaxUtteranceMs: STT_MAX_UTTERANCE_MS,
+    sttMinTranscribeMs: STT_MIN_TRANSCRIBE_MS,
+    sttGraceMs: STT_GRACE_MS,
+  };
+}
+
+function normalizePromptTemplates(raw) {
+  const defaults = buildDefaultPromptTemplates();
+  const parsed = raw || {};
+  return {
+    classicPrompt: firstNonEmptyText(parsed?.classicPrompt) || defaults.classicPrompt,
+    realtimePrompt: firstNonEmptyText(parsed?.realtimePrompt) || defaults.realtimePrompt,
+    screeningMaxMinutes: readNumberSetting(parsed?.screeningMaxMinutes, defaults.screeningMaxMinutes, 1, 180),
+    sttVadRmsThreshold: readNumberSetting(parsed?.sttVadRmsThreshold, defaults.sttVadRmsThreshold, 0.0001, 0.1),
+    sttMinSpeechMs: readNumberSetting(parsed?.sttMinSpeechMs, defaults.sttMinSpeechMs, 1, 10000),
+    sttMaxSilenceMs: readNumberSetting(parsed?.sttMaxSilenceMs, defaults.sttMaxSilenceMs, 100, 20000),
+    sttMaxUtteranceMs: readNumberSetting(parsed?.sttMaxUtteranceMs, defaults.sttMaxUtteranceMs, 1000, 120000),
+    sttMinTranscribeMs: readNumberSetting(parsed?.sttMinTranscribeMs, defaults.sttMinTranscribeMs, 100, 10000),
+    sttGraceMs: readNumberSetting(parsed?.sttGraceMs, defaults.sttGraceMs, 0, 10000),
+  };
+}
+
+async function loadPromptTemplatesFromAppApi() {
+  const appBaseUrls = getAppBaseUrls();
+  if (appBaseUrls.length === 0) return null;
+
+  for (const base of appBaseUrls) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
+    try {
+      const response = await fetch(`${base}/api/agent-settings`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      });
+      if (!response.ok) continue;
+      const json = await response.json().catch(() => ({}));
+      const settings = json?.settings || {};
+      const normalized = normalizePromptTemplates(settings);
+      console.log(`[agent-settings] loaded prompt templates from app API: ${base}`);
+      return normalized;
+    } catch {
+      // Try next base URL.
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return null;
+}
+
 async function loadPersistedPromptTemplates() {
+  const fromApi = await loadPromptTemplatesFromAppApi();
+  if (fromApi) return fromApi;
+
   try {
     const raw = await fs.readFile(getAgentSettingsPath(), 'utf8');
     const parsed = JSON.parse(raw);
-    const readNumber = (value, fallback, min, max) => {
-      const n = Number(value);
-      if (!Number.isFinite(n)) return fallback;
-      return Math.max(min, Math.min(max, n));
-    };
-    return {
-      classicPrompt: firstNonEmptyText(parsed?.classicPrompt) || getDefaultClassicInterviewPrompt(),
-      realtimePrompt: firstNonEmptyText(parsed?.realtimePrompt) || getDefaultRealtimeScreeningPrompt(),
-      screeningMaxMinutes: readNumber(parsed?.screeningMaxMinutes, SCREENING_MAX_MINUTES, 1, 180),
-      sttVadRmsThreshold: readNumber(parsed?.sttVadRmsThreshold, STT_VAD_RMS_THRESHOLD, 0.0001, 0.1),
-      sttMinSpeechMs: readNumber(parsed?.sttMinSpeechMs, STT_MIN_SPEECH_MS, 1, 10000),
-      sttMaxSilenceMs: readNumber(parsed?.sttMaxSilenceMs, STT_MAX_SILENCE_MS, 100, 20000),
-      sttMaxUtteranceMs: readNumber(parsed?.sttMaxUtteranceMs, STT_MAX_UTTERANCE_MS, 1000, 120000),
-      sttMinTranscribeMs: readNumber(parsed?.sttMinTranscribeMs, STT_MIN_TRANSCRIBE_MS, 100, 10000),
-      sttGraceMs: readNumber(parsed?.sttGraceMs, STT_GRACE_MS, 0, 10000),
-    };
+    const normalized = normalizePromptTemplates(parsed);
+    console.log('[agent-settings] loaded prompt templates from local agent-settings.json');
+    return normalized;
   } catch {
-    return {
-      classicPrompt: getDefaultClassicInterviewPrompt(),
-      realtimePrompt: getDefaultRealtimeScreeningPrompt(),
-      screeningMaxMinutes: SCREENING_MAX_MINUTES,
-      sttVadRmsThreshold: STT_VAD_RMS_THRESHOLD,
-      sttMinSpeechMs: STT_MIN_SPEECH_MS,
-      sttMaxSilenceMs: STT_MAX_SILENCE_MS,
-      sttMaxUtteranceMs: STT_MAX_UTTERANCE_MS,
-      sttMinTranscribeMs: STT_MIN_TRANSCRIBE_MS,
-      sttGraceMs: STT_GRACE_MS,
-    };
+    console.log('[agent-settings] using built-in defaults (API/local settings unavailable)');
+    return buildDefaultPromptTemplates();
   }
 }
 
@@ -722,7 +798,7 @@ function buildRealtimeScreeningRuntimeInstruction({
   const currentTopic = String(interviewState.currentTopic || '').trim();
   contextLines.push('Interview guardrails: stay strictly in interview mode.');
   contextLines.push(
-    'Allowed only: interview Q&A, follow-ups, clarifications tied to the current question, and voice controls.',
+    'Allowed only: interview Q&A and follow-ups tied to the current question.',
   );
   contextLines.push(
     'Disallowed: jokes, entertainment, trivia/general knowledge, personal advice, unrelated chat. Refuse and redirect.',
@@ -736,9 +812,6 @@ function buildRealtimeScreeningRuntimeInstruction({
   contextLines.push(`Must-have skills: ${mustHaveSkills.join(', ') || 'not provided'}`);
   contextLines.push(`Required tech stack: ${requiredTechStack.join(', ') || 'not provided'}`);
   contextLines.push(`Good-to-have skills (defer): ${goodToHaveSkills.join(', ') || 'not provided'}`);
-  if (voiceStyleInstruction) {
-    contextLines.push(`Voice style controls: ${voiceStyleInstruction}`);
-  }
   const contextBlock = contextLines.length ? `\n\nKnown context:\n${contextLines.join('\n')}` : '';
 
   const prompt = firstNonEmptyText(basePrompt) || getDefaultRealtimeScreeningPrompt();
@@ -822,9 +895,26 @@ async function createAgentSession(
     candidateEverJoined: false,
     screeningHardStopTimer: null,
   };
+  const hasHumanParticipants = () => {
+    for (const participant of room.remoteParticipants.values()) {
+      if (!isBotIdentity(participant.identity)) return true;
+    }
+    return false;
+  };
 
-  room.on(RoomEvent.ParticipantConnected, (participant) => {
+  const handleParticipantConnected = (participant, source = 'event') => {
     console.log(`[room:${roomName}] participant connected: ${participant.identity}`);
+    if (source !== 'event') {
+      console.log(`[room:${roomName}] participant detected on connect: ${participant.identity}`);
+    }
+    if (!isBotIdentity(participant.identity)) {
+      candidateEverJoined = true;
+      state.candidateEverJoined = true;
+    }
+    if (selectedAgentType === AGENT_TYPE_CLASSIC && isInterviewPaused) {
+      console.log(`[agent][${roomName}] clearing stale paused state on reconnect`);
+      isInterviewPaused = false;
+    }
     void publishPauseState();
     if (idleTimer) {
       clearTimeout(idleTimer);
@@ -846,19 +936,27 @@ async function createAgentSession(
       stop,
     });
     candidateEverJoined = state.candidateEverJoined;
+  };
+
+  room.on(RoomEvent.ParticipantConnected, (participant) => {
+    handleParticipantConnected(participant, 'event');
   });
 
   room.on(RoomEvent.ParticipantDisconnected, (participant) => {
     console.log(`[room:${roomName}] participant disconnected: ${participant.identity}`);
-    directClientReadyByParticipant.delete(participant.identity);
     void publishPauseState();
+    if (!hasHumanParticipants()) {
+      state.kickoffSent = false;
+      kickoffTurnCompleted = false;
+      console.log(`[agent][${roomName}] reset kickoff state after all human participants left`);
+    }
     if (emptyRoomStopTimer) {
       clearTimeout(emptyRoomStopTimer);
       emptyRoomStopTimer = null;
     }
     if (room.remoteParticipants.size === 0) {
       const emptyDelayMs = candidateEverJoined
-        ? POST_JOIN_EMPTY_ROOM_FINALIZE_DELAY_MS
+        ? RECONNECT_GRACE_MS
         : EMPTY_ROOM_FINALIZE_DELAY_MS;
       emptyRoomStopTimer = setTimeout(() => {
         stop('room_empty').catch((err) => {
@@ -871,6 +969,11 @@ async function createAgentSession(
 
   room.on(RoomEvent.Disconnected, () => {
     console.log(`[room:${roomName}] disconnected`);
+    if (!stopping && !stopped) {
+      stop('room_disconnected').catch((err) => {
+        console.error(`[agent][${roomName}] room_disconnected stop failed:`, err);
+      });
+    }
   });
 
   let audioPump = null;
@@ -920,8 +1023,6 @@ async function createAgentSession(
     currentTopic: '',
   };
   let voiceStyleInstruction = '';
-  let lastSkillAnchorTs = 0;
-  let lastHeartbeatAnchorTs = 0;
   const fallbackRuntimeInstruction = firstNonEmptyText(
     process.env.OPENAI_RUNTIME_INSTRUCTION,
     'Have a natural spoken conversation. Keep responses brief, clear, and friendly.',
@@ -930,37 +1031,23 @@ async function createAgentSession(
   const activeInputStreams = new Map();
   let assistantState = 'idle'; // idle | thinking | speaking
   let interruptRequested = false;
+  let kickoffTurnCompleted = false;
+  let awaitingKickoffAck = false;
+  let kickoffRecoveryRequested = false;
   let latestInputSeq = 0;
   let processingInputQueue = false;
   let queueWorker = Promise.resolve();
   const inputQueue = [];
-  const isDirectClientMediaMode = selectedAgentType === AGENT_TYPE_REALTIME_SCREENING && AGENT_MEDIA_MODE === 'direct';
-  const isRealtimeDuplexAgent = selectedAgentType === AGENT_TYPE_REALTIME_SCREENING && ENABLE_FULL_DUPLEX;
-  const mediaModeConfigured = AGENT_MEDIA_MODE;
-  const directClientReadyByParticipant = new Map();
-  let realtimeWs = null;
-  let realtimeReady = false;
-  const assistantTranscriptByItemId = new Map();
+  const isRealtimeScreeningAgent = selectedAgentType === AGENT_TYPE_REALTIME_SCREENING;
   const appBaseUrls = getAppBaseUrls();
   let lastGoodAppBaseUrl = appBaseUrls[0] || '';
   const apiRequestTimeoutMs = Math.max(1200, Number(process.env.AGENT_API_TIMEOUT_MS || 3500));
   const apiRetryCount = Math.max(1, Number(process.env.AGENT_API_RETRY_COUNT || 2));
-  const getMediaModeEffective = () => {
-    if (!isDirectClientMediaMode) return 'relay';
-    for (const ready of directClientReadyByParticipant.values()) {
-      if (ready) return 'direct';
-    }
-    return 'relay';
-  };
-  const isDirectMediaActive = () => isDirectClientMediaMode && getMediaModeEffective() === 'direct';
 
   const requestInterruption = () => {
     if (assistantState === 'idle') return;
     interruptRequested = true;
     if (audioPump) audioPump.clear();
-    if (realtimeReady && realtimeWs) {
-      realtimeWs.send({ type: 'response.cancel' });
-    }
   };
 
   const fetchAppApi = async (pathName, options = {}) => {
@@ -1021,21 +1108,7 @@ async function createAgentSession(
     if (topic) interviewState.currentTopic = topic.slice(0, 120);
   };
 
-  const sendRealtimeSystemMessage = (text) => {
-    if (!realtimeWs || !realtimeReady) return;
-    const content = String(text || '').trim();
-    if (!content) return;
-    realtimeWs.send({
-      type: 'conversation.item.create',
-      item: {
-        type: 'message',
-        role: 'system',
-        content: [{ type: 'input_text', text: content.slice(0, 900) }],
-      },
-    });
-  };
-
-  // Anchors the model to one must-have skill before the next question/follow-up turn.
+  // Keeps current skill/topic context aligned for classic turn-based prompting.
   const setCurrentSkill = (skillName, currentQuestion, topicLabel = '') => {
     const nextSkill = String(skillName || '').trim() || interviewState.currentSkill || jobMetadata.mustHaveSkills[0] || '';
     const nextQuestion = String(currentQuestion || '').trim() || interviewState.currentQuestion;
@@ -1046,37 +1119,12 @@ async function createAgentSession(
     if (nextQuestion) {
       interviewState.currentQuestion = nextQuestion.slice(0, 280);
     }
-    if (!realtimeWs || !realtimeReady) return;
-    const now = Date.now();
-    if (now - lastSkillAnchorTs < 1000) return;
-    lastSkillAnchorTs = now;
-    sendRealtimeSystemMessage(
-      [
-        `Interview mode. Current must-have skill focus: ${interviewState.currentSkill}.`,
-        `Current question: ${interviewState.currentQuestion || 'Please answer the current interview question.'}.`,
-        'Stay strictly scoped to this skill. If the candidate drifts, redirect back.',
-      ].join('\n'),
-    );
-  };
-
-  const injectCurrentSkillHeartbeat = () => {
-    if (!realtimeWs || !realtimeReady) return;
-    if (!interviewState.currentSkill) return;
-    const now = Date.now();
-    if (now - lastHeartbeatAnchorTs < 45000) return;
-    lastHeartbeatAnchorTs = now;
-    sendRealtimeSystemMessage(
-      `Still evaluating must-have skill: ${interviewState.currentSkill}. Keep this turn tightly scoped to the current question.`,
-    );
   };
 
   const applyVoiceControls = (controls = []) => {
     const deduped = Array.from(new Set(controls));
     if (deduped.length === 0) return;
     voiceStyleInstruction = deduped.join(', ');
-    if (isRealtimeDuplexAgent && realtimeWs) {
-      sendRealtimeSessionUpdate();
-    }
   };
 
   const buildRedirectTail = () =>
@@ -1139,136 +1187,6 @@ async function createAgentSession(
         })
       : fallbackRuntimeInstruction;
 
-  const sendRealtimeSessionUpdate = () => {
-    if (!realtimeWs) return;
-    realtimeWs.send({
-      type: 'session.update',
-      session: {
-        modalities: ['audio', 'text'],
-        instructions: getRuntimeInstruction(),
-        voice: ttsVoice,
-        input_audio_format: 'pcm16',
-        output_audio_format: 'pcm16',
-        input_audio_transcription: {
-          model: 'whisper-1',
-        },
-        turn_detection: {
-          type: 'server_vad',
-          create_response: false,
-          interrupt_response: true,
-          threshold: REALTIME_SERVER_VAD_THRESHOLD,
-          silence_duration_ms: Math.max(300, Math.min(1200, sttTurnConfig.maxSilenceMs)),
-          prefix_padding_ms: 300,
-        },
-      },
-    });
-  };
-
-  const ensureRealtimeDuplex = async () => {
-    if (!isRealtimeDuplexAgent || realtimeReady) return;
-    if (!OpenAIRealtimeWS) {
-      throw new Error('OpenAI realtime websocket dependency unavailable (module openai/beta/realtime/ws)');
-    }
-
-    const model = agent.getLlmModel();
-    realtimeWs = new OpenAIRealtimeWS({ model }, new OpenAI({ apiKey: process.env.OPENAI_API_KEY }));
-
-    realtimeWs.on('error', (err) => {
-      console.error(`[agent][${roomName}] realtime websocket error:`, err?.message || err);
-    });
-
-    realtimeWs.on('session.created', () => {
-      sendRealtimeSessionUpdate();
-    });
-
-    realtimeWs.on('session.updated', () => {
-      realtimeReady = true;
-      console.log(`[agent][${roomName}] realtime session ready`);
-      void publishPauseState();
-    });
-
-    realtimeWs.on('input_audio_buffer.speech_started', () => {
-      assistantState = 'idle';
-      if (audioPump) audioPump.clear();
-    });
-
-    realtimeWs.on('conversation.item.input_audio_transcription.completed', async (event) => {
-      const text = String(event?.transcript || '').trim();
-      if (!text || isInterviewPaused) return;
-      await ensureInterviewStarted().catch(() => undefined);
-      appendTranscript({ role: 'candidate', by: 'participant', text, ts: nowIso() });
-      console.log(`\n[user][${roomName}] ${text}`);
-      const turnGuard = buildTurnGuard(text);
-      if (turnGuard.systemMessage) {
-        sendRealtimeSystemMessage(turnGuard.systemMessage);
-      } else {
-        injectCurrentSkillHeartbeat();
-      }
-      if (interviewState.currentSkill) {
-        setCurrentSkill(interviewState.currentSkill, interviewState.currentQuestion, interviewState.currentTopic);
-      }
-      realtimeWs.send({
-        type: 'response.create',
-        response: {
-          modalities: ['audio', 'text'],
-        },
-      });
-    });
-
-    realtimeWs.on('response.audio_transcript.delta', (event) => {
-      const itemId = String(event?.item_id || '').trim();
-      if (!itemId) return;
-      const prev = assistantTranscriptByItemId.get(itemId) || '';
-      assistantTranscriptByItemId.set(itemId, prev + String(event?.delta || ''));
-    });
-
-    realtimeWs.on('response.audio_transcript.done', (event) => {
-      const itemId = String(event?.item_id || '').trim();
-      const finalText = String(event?.transcript || '').trim();
-      const fallback = itemId ? String(assistantTranscriptByItemId.get(itemId) || '').trim() : '';
-      const text = finalText || fallback;
-      if (itemId) assistantTranscriptByItemId.delete(itemId);
-      if (text && !isInterviewPaused) {
-        appendTranscript({ role: 'assistant', by: selectedBotName, text, ts: nowIso() });
-        const maybeQuestion = extractQuestionFromText(text);
-        const maybeMustHaveSkill = findMatchingSkillName(
-          String(text || '').toLowerCase(),
-          jobMetadata.mustHaveSkills,
-        );
-        if (maybeMustHaveSkill) {
-          setCurrentSkill(maybeMustHaveSkill, maybeQuestion || interviewState.currentQuestion, maybeMustHaveSkill);
-        } else if (maybeQuestion) {
-          updateInterviewState({ currentQuestion: maybeQuestion });
-        }
-      }
-    });
-
-    realtimeWs.on('response.audio.delta', async (event) => {
-      if (!audioPump || isInterviewPaused) return;
-      const b64 = String(event?.delta || '');
-      if (!b64) return;
-
-      assistantState = 'speaking';
-      const pcm24k = Buffer.from(b64, 'base64');
-      if (!pcm24k.length) return;
-      const inputSamples = bufferLeToInt16(pcm24k);
-      const outputSamples = resampleInt16Mono(inputSamples, REALTIME_IO_SAMPLE_RATE, TARGET_SAMPLE_RATE);
-      await audioPump.writePcm16le(int16ToBufferLE(outputSamples));
-    });
-
-    realtimeWs.on('response.done', () => {
-      assistantState = 'idle';
-    });
-
-    const readyDeadline = Date.now() + 10000;
-    while (!realtimeReady && Date.now() < readyDeadline) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    if (!realtimeReady) {
-      throw new Error('Timed out waiting for realtime session initialization');
-    }
-  };
-
   const buildTranscriptText = () =>
     transcript
       .map((entry) => {
@@ -1280,6 +1198,59 @@ async function createAgentSession(
       .filter(Boolean)
       .join('\n')
       .slice(0, 60000);
+
+  const countCandidateTurnsInTranscriptText = (text) => {
+    const raw = String(text || '').trim();
+    if (!raw) return 0;
+    return raw
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0 && /\]\s*Candidate\s*:/.test(line)).length;
+  };
+
+  const mergeTranscriptText = (existingText, generatedText) => {
+    const existing = String(existingText || '').trim();
+    const generated = String(generatedText || '').trim();
+    if (existing && generated) {
+      if (existing.includes(generated)) return existing.slice(-FINAL_TRANSCRIPT_MAX_CHARS);
+      if (generated.includes(existing)) return generated.slice(-FINAL_TRANSCRIPT_MAX_CHARS);
+      return `${existing}\n${generated}`.slice(-FINAL_TRANSCRIPT_MAX_CHARS);
+    }
+    return (generated || existing).slice(-FINAL_TRANSCRIPT_MAX_CHARS);
+  };
+
+  const waitForPersistedTranscript = async (initialLatest) => {
+    let latest = initialLatest || null;
+    let transcriptText = String(latest?.transcriptText || '').trim();
+    if (selectedAgentType !== AGENT_TYPE_REALTIME_SCREENING) {
+      return { latest, transcriptText };
+    }
+
+    const deadline = Date.now() + 12000;
+    let stableRounds = 0;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      let next = null;
+      try {
+        next = await fetchLatestInterviewByRoom();
+      } catch {
+        next = null;
+      }
+      if (next?.id && !interviewId) {
+        interviewId = next.id;
+      }
+      const nextText = String(next?.transcriptText || '').trim();
+      if (nextText.length > transcriptText.length) {
+        transcriptText = nextText;
+        latest = next;
+        stableRounds = 0;
+      } else if (countCandidateTurnsInTranscriptText(transcriptText) > 0) {
+        stableRounds += 1;
+        if (stableRounds >= 2) break;
+      }
+    }
+    return { latest, transcriptText };
+  };
 
   const fetchLatestInterviewByRoom = async () => {
     if (appBaseUrls.length === 0) return null;
@@ -1343,8 +1314,9 @@ async function createAgentSession(
     }
   };
 
-  const buildFallbackAssessment = (stopReason) => {
-    const turnCount = transcript.filter((t) => t.role === 'candidate').length;
+  const buildFallbackAssessment = (stopReason, turnCountOverride = null) => {
+    const observedTurnCount = transcript.filter((t) => t.role === 'candidate').length;
+    const turnCount = Number.isFinite(turnCountOverride) ? Math.max(0, Number(turnCountOverride)) : observedTurnCount;
     const interviewScore = turnCount >= 8 ? 68 : turnCount >= 4 ? 58 : 48;
     const rubricScore = turnCount >= 8 ? 6.8 : turnCount >= 4 ? 5.8 : 4.8;
     const competencyTemplate = [
@@ -1407,7 +1379,7 @@ async function createAgentSession(
     };
   };
 
-  const evaluateInterview = async (stopReason) => {
+  const evaluateInterview = async (stopReason, persistedTranscriptText = '') => {
     const candidateTurns = transcript
       .filter((t) => t.role === 'candidate')
       .slice(-40)
@@ -1416,9 +1388,11 @@ async function createAgentSession(
       .filter((t) => t.role === 'assistant')
       .slice(-40)
       .map((t) => ({ ts: t.ts, text: t.text }));
+    const persistedCandidateTurns = countCandidateTurnsInTranscriptText(persistedTranscriptText);
+    const observedCandidateTurns = Math.max(candidateTurns.length, persistedCandidateTurns);
 
     if (candidateTurns.length === 0) {
-      return buildFallbackAssessment(stopReason);
+      return buildFallbackAssessment(stopReason, observedCandidateTurns);
     }
 
     const prompt = buildEvaluationReportPrompt({
@@ -1432,7 +1406,7 @@ async function createAgentSession(
         model: process.env.OPENAI_EVAL_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini',
         temperature: 0.2,
       });
-      const fallback = buildFallbackAssessment(stopReason);
+      const fallback = buildFallbackAssessment(stopReason, observedCandidateTurns);
       const reportRaw = raw?.report || {};
       const decision = normalizeDecision(reportRaw?.recommendationDecision);
       const rawRecommendation = String(raw?.recommendation || '').trim();
@@ -1500,7 +1474,7 @@ async function createAgentSession(
       };
     } catch (err) {
       console.warn(`[agent][${roomName}] evaluation generation failed:`, err?.message || err);
-      return buildFallbackAssessment(stopReason);
+      return buildFallbackAssessment(stopReason, observedCandidateTurns);
     }
   };
 
@@ -1512,7 +1486,19 @@ async function createAgentSession(
     }
     if (!interviewStarted) return;
     finalReportPublished = true;
-    const assessment = await evaluateInterview(stopReason);
+    let latest = null;
+    try {
+      latest = await fetchLatestInterviewByRoom();
+    } catch {
+      latest = null;
+    }
+    if (!interviewId) {
+      interviewId = latest?.id || '';
+    }
+    const persisted = await waitForPersistedTranscript(latest);
+    const existingTranscriptText = String(persisted.transcriptText || '').trim();
+    const assessment = await evaluateInterview(stopReason, existingTranscriptText);
+    const mergedTranscriptText = mergeTranscriptText(existingTranscriptText, buildTranscriptText());
     const update = {
       status: 'completed',
       meetingActualStart: interviewStartedAt || nowIso(),
@@ -1524,14 +1510,10 @@ async function createAgentSession(
       rubricScore: Number(Number(assessment.rubricScore || 0).toFixed(1)),
       nextSteps: assessment.nextSteps,
       assessmentReport: assessment.report,
-      transcriptText: buildTranscriptText(),
+      transcriptText: mergedTranscriptText,
     };
 
     try {
-      if (!interviewId) {
-        const latest = await fetchLatestInterviewByRoom();
-        interviewId = latest?.id || '';
-      }
       if (interviewId) {
         await patchInterview(interviewId, update);
         console.log(`[agent][${roomName}] published interview report for ${interviewId}`);
@@ -1642,13 +1624,8 @@ async function createAgentSession(
   };
 
   const publishPauseState = async () => {
-    const mediaModeEffective = getMediaModeEffective();
-    const transportMode =
-      mediaModeEffective === 'direct'
-        ? 'direct_client'
-        : isRealtimeDuplexAgent && realtimeReady
-          ? 'realtime_ws'
-          : 'turn_based';
+    const mediaModeEffective = isRealtimeScreeningAgent ? 'direct' : 'turn_based';
+    const transportMode = isRealtimeScreeningAgent ? 'direct_client' : 'turn_based';
     try {
       const payload = Buffer.from(
         JSON.stringify({
@@ -1656,10 +1633,10 @@ async function createAgentSession(
           paused: isInterviewPaused,
           agentType: selectedAgentType,
           transportMode,
-          fullDuplex: transportMode === 'realtime_ws' || transportMode === 'direct_client',
-          realtimeReady: Boolean(realtimeReady),
+          fullDuplex: transportMode === 'direct_client',
+          realtimeReady: false,
           assistantState: String(assistantState || 'idle'),
-          mediaModeConfigured,
+          mediaModeConfigured: isRealtimeScreeningAgent ? 'direct' : 'turn_based',
           mediaModeEffective,
           ts: nowIso(),
         }),
@@ -1671,10 +1648,16 @@ async function createAgentSession(
   };
 
   const processUserInput = async (text, sourceIdentity = 'participant', seq = 0) => {
-    if (isDirectMediaActive()) return;
+    if (isRealtimeScreeningAgent) {
+      console.log(`[agent][${roomName}] realtime_screening passive mode ignoring turn from '${sourceIdentity}'`);
+      return;
+    }
     const trimmed = text.trim();
     if (!trimmed) return;
-    if (isInterviewPaused && sourceIdentity !== 'agent_bootstrap') return;
+    if (isInterviewPaused && sourceIdentity !== 'agent_bootstrap') {
+      console.log(`[agent][${roomName}] dropping turn while paused from '${sourceIdentity}'`);
+      return;
+    }
     const isBootstrap = sourceIdentity === 'agent_bootstrap';
 
     if (isBootstrap && !interviewState.currentSkill && jobMetadata.mustHaveSkills.length > 0) {
@@ -1685,10 +1668,46 @@ async function createAgentSession(
       );
     }
 
-    const userMessage =
-      isBootstrap
-        ? 'Start the interview now with a warm intro, set expectations, and ask for consent to begin.'
-        : trimmed;
+    if (isBootstrap) {
+      // Keep kickoff deterministic and very short to reduce first-turn latency/failures.
+      assistantState = 'speaking';
+      interruptRequested = false;
+      process.stdout.write(`[assistant][${roomName}] `);
+      const kickoffLine = 'Hi.';
+      // Allow immediate candidate replies even if they start while kickoff audio is still playing.
+      kickoffTurnCompleted = true;
+      awaitingKickoffAck = true;
+      process.stdout.write(`${kickoffLine}\n`);
+      try {
+        while (!audioPump) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        for await (const pcmChunk of ttsService.streamPcm48kForText(kickoffLine)) {
+          await audioPump.writePcm16le(pcmChunk);
+        }
+        if (BOOTSTRAP_AUDIO_PROBE) {
+          const probeLine = 'Audio check.';
+          process.stdout.write(`[assistant][${roomName}] ${probeLine}\n`);
+          for await (const pcmChunk of ttsService.streamPcm48kForText(probeLine)) {
+            await audioPump.writePcm16le(pcmChunk);
+          }
+          if (!isInterviewPaused) {
+            appendTranscript({ role: 'assistant', by: selectedBotName, text: probeLine, ts: nowIso() });
+          }
+        }
+      } catch (error) {
+        console.error(`[agent][${roomName}] kickoff TTS failed:`, error?.message || error);
+      } finally {
+        if (!isInterviewPaused) {
+          appendTranscript({ role: 'assistant', by: selectedBotName, text: kickoffLine, ts: nowIso() });
+        }
+        kickoffRecoveryRequested = false;
+        assistantState = 'idle';
+      }
+      return;
+    }
+
+    const userMessage = trimmed;
     const runtimeInstruction = getRuntimeInstruction();
     const turnGuard = isBootstrap ? null : buildTurnGuard(trimmed);
 
@@ -1696,72 +1715,98 @@ async function createAgentSession(
       console.log(`\n[user][${roomName}] ${trimmed}`);
       appendTranscript({ role: 'candidate', by: sourceIdentity, text: trimmed, ts: nowIso() });
     }
+
+    if (!isBootstrap && awaitingKickoffAck) {
+      awaitingKickoffAck = false;
+      const firstQuestion = 'Great. Recent role and key project?';
+      assistantState = 'speaking';
+      interruptRequested = false;
+      process.stdout.write(`[assistant][${roomName}] ${firstQuestion}\n`);
+      try {
+        while (!audioPump) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        for await (const pcmChunk of ttsService.streamPcm48kForText(firstQuestion)) {
+          await audioPump.writePcm16le(pcmChunk);
+        }
+      } catch (error) {
+        console.error(`[agent][${roomName}] first-question TTS failed:`, error?.message || error);
+      } finally {
+        if (!isInterviewPaused) {
+          appendTranscript({ role: 'assistant', by: selectedBotName, text: firstQuestion, ts: nowIso() });
+        }
+        assistantState = 'idle';
+      }
+      return;
+    }
+
     assistantState = 'thinking';
     interruptRequested = false;
     process.stdout.write(`[assistant][${roomName}] `);
 
-    if (seq > 0 && seq < latestInputSeq) {
-      assistantState = 'idle';
-      return;
-    }
-
-    if (isRealtimeDuplexAgent) {
-      if (!realtimeReady || !realtimeWs) {
-        await ensureRealtimeDuplex();
-      }
-      realtimeWs.send({
-        type: 'conversation.item.create',
-        item: {
-          type: 'message',
-          role: 'user',
-          content: [{ type: 'input_text', text: userMessage }],
-        },
-      });
-      if (turnGuard?.systemMessage) {
-        sendRealtimeSystemMessage(turnGuard.systemMessage);
-      } else {
-        injectCurrentSkillHeartbeat();
-      }
-      if (interviewState.currentSkill) {
-        setCurrentSkill(interviewState.currentSkill, interviewState.currentQuestion, interviewState.currentTopic);
-      }
-      realtimeWs.send({
-        type: 'response.create',
-        response: {
-          modalities: ['audio', 'text'],
-        },
-      });
+    if (!isBootstrap && seq > 0 && seq < latestInputSeq) {
       assistantState = 'idle';
       return;
     }
 
     let assistantText = '';
-    const safeUserMessage = turnGuard?.shouldRedirect ? buildRedirectTail() : userMessage;
-    const llmDeltaStream = llmService.streamAssistantReply(safeUserMessage, {
-      runtimeInstruction,
-    });
-    const guardedLlmDeltaStream = (async function* guarded() {
-      for await (const delta of llmDeltaStream) {
-        if (interruptRequested || (seq > 0 && seq < latestInputSeq)) break;
-        assistantText += delta;
-        process.stdout.write(delta);
-        yield delta;
-      }
-      process.stdout.write('\n');
-    })();
+    try {
+      const safeUserMessage = turnGuard?.shouldRedirect ? buildRedirectTail() : userMessage;
+      const llmDeltaStream = llmService.streamAssistantReply(safeUserMessage, { runtimeInstruction });
+      const consumeAssistantText = async () => {
+        for await (const delta of llmDeltaStream) {
+          if (interruptRequested || (!isBootstrap && seq > 0 && seq < latestInputSeq)) break;
+          assistantText += delta;
+          process.stdout.write(delta);
+        }
+        process.stdout.write('\n');
+      };
 
-    assistantState = 'speaking';
-    while (!audioPump) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      assistantState = 'speaking';
+      while (!audioPump) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      if (AGENT_PROGRESSIVE_TTS) {
+        const guardedLlmDeltaStream = (async function* guarded() {
+          for await (const delta of llmDeltaStream) {
+            if (interruptRequested || (!isBootstrap && seq > 0 && seq < latestInputSeq)) break;
+            assistantText += delta;
+            process.stdout.write(delta);
+            yield delta;
+          }
+          process.stdout.write('\n');
+        })();
+        for await (const pcmChunk of ttsService.streamFromLlmText(guardedLlmDeltaStream)) {
+          if (interruptRequested || (!isBootstrap && seq > 0 && seq < latestInputSeq)) break;
+          await audioPump.writePcm16le(pcmChunk);
+        }
+      } else {
+        await consumeAssistantText();
+        const spokenText = toShortSpeechText(assistantText.trim(), 8);
+        if (spokenText) {
+          try {
+            for await (const pcmChunk of ttsService.streamPcm48kForText(spokenText)) {
+              if (interruptRequested || (!isBootstrap && seq > 0 && seq < latestInputSeq)) break;
+              await audioPump.writePcm16le(pcmChunk);
+            }
+          } catch (error) {
+            console.error(`[agent][${roomName}] buffered TTS failed:`, error?.message || error);
+          }
+        }
+      }
+      if (assistantText.trim() && !isInterviewPaused) {
+        appendTranscript({ role: 'assistant', by: selectedBotName, text: assistantText.trim(), ts: nowIso() });
+      }
+    } catch (err) {
+      process.stdout.write('\n');
+      console.error(`[agent][${roomName}] processUserInput failed:`, err?.message || err);
+    } finally {
+      if (isBootstrap) {
+        // Never leave kickoff incomplete; otherwise later STT turns are ignored indefinitely.
+        kickoffTurnCompleted = true;
+      }
+      assistantState = 'idle';
     }
-    for await (const pcmChunk of ttsService.streamFromLlmText(guardedLlmDeltaStream)) {
-      if (interruptRequested || (seq > 0 && seq < latestInputSeq)) break;
-      await audioPump.writePcm16le(pcmChunk);
-    }
-    if (assistantText.trim() && !isInterviewPaused) {
-      appendTranscript({ role: 'assistant', by: selectedBotName, text: assistantText.trim(), ts: nowIso() });
-    }
-    assistantState = 'idle';
   };
 
   const drainInputQueue = async () => {
@@ -1778,7 +1823,7 @@ async function createAgentSession(
   };
 
   const queueUserTurn = (text, sourceIdentity = 'participant') => {
-    if (isDirectMediaActive() && sourceIdentity !== 'stdin' && sourceIdentity !== 'simulated') return;
+    if (isRealtimeScreeningAgent && sourceIdentity !== 'stdin' && sourceIdentity !== 'simulated') return;
     const cleaned = String(text || '').trim();
     if (!cleaned) return;
 
@@ -1788,10 +1833,6 @@ async function createAgentSession(
       sourceIdentity: sourceIdentity || 'participant',
       seq: latestInputSeq,
     });
-
-    if (ENABLE_BARGE_IN && assistantState !== 'idle') {
-      requestInterruption();
-    }
 
     queueWorker = queueWorker.then(drainInputQueue).catch((err) => {
       assistantState = 'idle';
@@ -1803,46 +1844,8 @@ async function createAgentSession(
     const streamKey = `${participant.identity}:${track.sid ?? 'audio'}`;
     if (activeInputStreams.has(streamKey)) return;
 
-    if (isDirectMediaActive()) {
-      console.log(`[direct][${roomName}] skipping agent audio relay for '${participant.identity}'`);
-      return;
-    }
-
-    if (isRealtimeDuplexAgent) {
-      const stream = new AudioStream(track, {
-        sampleRate: REALTIME_IO_SAMPLE_RATE,
-        numChannels: STT_CHANNELS,
-        frameSizeMs: 20,
-      });
-      const reader = stream.getReader();
-      const readLoop = (async () => {
-        try {
-          if (!realtimeReady) {
-            await ensureRealtimeDuplex();
-          }
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            if (!value || !value.data || value.data.length === 0) continue;
-            if (isInterviewPaused || !realtimeReady || !realtimeWs) continue;
-
-            const pcm = int16ToBufferLE(value.data);
-            realtimeWs.send({
-              type: 'input_audio_buffer.append',
-              audio: pcm.toString('base64'),
-            });
-          }
-        } catch (err) {
-          console.error(`[rt][${roomName}][${participant.identity}] audio stream error:`, err);
-        }
-      })();
-
-      activeInputStreams.set(streamKey, {
-        reader,
-        turnDetector: null,
-        readLoop,
-      });
-      console.log(`[rt][${roomName}] streaming duplex audio for '${participant.identity}'`);
+    if (isRealtimeScreeningAgent) {
+      console.log(`[direct][${roomName}] realtime_screening passive mode skipping transcription for '${participant.identity}'`);
       return;
     }
 
@@ -1857,11 +1860,39 @@ async function createAgentSession(
       transcriptionService,
       participantIdentity: participant.identity,
       ...sttTurnConfig,
-      onSpeechStart: async () => {
-        if (!ENABLE_FULL_DUPLEX || !ENABLE_BARGE_IN) return;
-        requestInterruption();
-      },
       onTranscription: async (text) => {
+        const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+        if (!kickoffTurnCompleted) {
+          if (!kickoffRecoveryRequested) {
+            kickoffRecoveryRequested = true;
+            console.log(`[agent][${roomName}] kickoff recovery triggered from STT`);
+            queueUserTurn('__bootstrap_interview_start__', 'agent_bootstrap');
+          }
+          console.log(
+            `[stt][${roomName}][${participant.identity}] ignored input before kickoff turn completed: "${normalized}"`,
+          );
+          return;
+        }
+        if (assistantState === 'speaking') {
+          if (!isRealtimeScreeningAgent && !ALLOW_CLASSIC_BARGE_IN_DURING_SPEAKING) {
+            const isExplicitInterrupt = /\b(stop|pause|hold on|wait|one second|excuse me)\b/i.test(normalized);
+            if (!isExplicitInterrupt) {
+              console.log(
+                `[stt][${roomName}][${participant.identity}] ignored barge-in while assistant speaking (classic mode): "${normalized}"`,
+              );
+              return;
+            }
+          }
+          const words = normalized ? normalized.split(/\s+/).length : 0;
+          const chars = normalized.length;
+          const looksLikeLowSignal = words < BARGE_IN_MIN_WORDS && chars < BARGE_IN_MIN_CHARS;
+          if (looksLikeLowSignal) {
+            console.log(
+              `[stt][${roomName}][${participant.identity}] ignored low-signal barge-in while assistant speaking: "${normalized}"`,
+            );
+            return;
+          }
+        }
         queueUserTurn(text, participant.identity);
       },
     });
@@ -1899,25 +1930,6 @@ async function createAgentSession(
       if (raw.startsWith('{')) {
         const parsed = JSON.parse(raw);
         if (parsed?.type === 'client_media_state') {
-          const wasDirectActive = isDirectMediaActive();
-          const ready = Boolean(parsed?.ready);
-          const mode = String(parsed?.mode || '').trim();
-          directClientReadyByParticipant.set(participant.identity, ready && mode === 'direct');
-          const isDirectActiveNow = isDirectMediaActive();
-          if (!wasDirectActive && isDirectActiveNow) {
-            requestInterruption();
-            for (const active of activeInputStreams.values()) {
-              active.reader.cancel().catch(() => undefined);
-            }
-            activeInputStreams.clear();
-          } else if (wasDirectActive && !isDirectActiveNow) {
-            for (const remoteParticipant of room.remoteParticipants.values()) {
-              for (const publication of remoteParticipant.trackPublications.values()) {
-                if (!(publication?.track instanceof RemoteAudioTrack)) continue;
-                startRemoteAudioTranscription(publication.track, remoteParticipant);
-              }
-            }
-          }
           void publishPauseState();
           return;
         }
@@ -1945,14 +1957,11 @@ async function createAgentSession(
     const text = parsed.text;
     if (parsed.contextUpdated || parsed.metadataUpdated || parsed.interviewStateUpdated) {
       console.log(`[agent][${roomName}] updated interview context metadata from data payload`);
-      if (isRealtimeDuplexAgent && realtimeWs) {
-        sendRealtimeSessionUpdate();
-      }
       if (parsed.interviewStateUpdated && interviewState.currentSkill) {
         setCurrentSkill(interviewState.currentSkill, interviewState.currentQuestion, interviewState.currentTopic);
       }
     }
-    if (!text || isDirectMediaActive()) return;
+    if (!text || isRealtimeScreeningAgent) return;
 
     console.log(`\n[data][${roomName}][${participant.identity}] ${text}`);
     queueUserTurn(text, participant.identity);
@@ -1985,8 +1994,13 @@ async function createAgentSession(
 
   await room.connect(livekitUrl, token);
   console.log(`[agent] connected to room '${roomName}' as '${identity}'`);
-  if (mediaModeConfigured === 'direct') {
-    console.log(`[agent][${roomName}] AGENT_MEDIA_MODE=direct; waiting for client direct media session`);
+  if (room.remoteParticipants.size > 0) {
+    for (const participant of room.remoteParticipants.values()) {
+      handleParticipantConnected(participant, 'post_connect_scan');
+    }
+  }
+  if (isRealtimeScreeningAgent) {
+    console.log(`[agent][${roomName}] realtime_screening direct mode active (passive tile/control only)`);
   }
   await publishPauseState();
   controlStateInterval = setInterval(() => {
@@ -2003,10 +2017,6 @@ async function createAgentSession(
   audioPump = new PcmAudioPump(audioSource, {
     maxQueueSeconds: AUDIO_PUMP_MAX_QUEUE_SECONDS,
   });
-  if (isRealtimeDuplexAgent) {
-    await ensureRealtimeDuplex();
-  }
-
   if (process.env.SIMULATED_INPUT && process.env.SIMULATED_INPUT.trim()) {
     queueUserTurn(process.env.SIMULATED_INPUT, 'simulated');
   }
@@ -2027,6 +2037,34 @@ async function createAgentSession(
 
   async function stop(reason = 'manual') {
     if (stopped || stopping) return;
+    if (reason === 'screening_time_limit') {
+      try {
+        const payload = Buffer.from(
+          JSON.stringify({
+            type: 'interview_notice',
+            reason,
+            level: 'info',
+            message:
+              'Interview time limit reached. Wrapping up now and saving your transcript and report.',
+            ts: nowIso(),
+          }),
+        );
+        await room.localParticipant.publishData(payload, { reliable: true });
+      } catch (err) {
+        console.warn(`[agent][${roomName}] failed to publish interview notice:`, err?.message || err);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+    }
+    if (
+      (reason === 'room_empty' || reason === 'idle_timeout') &&
+      room.remoteParticipants.size > 0
+    ) {
+      console.log(
+        `[agent][${roomName}] aborting stop '${reason}' because participants rejoined (${room.remoteParticipants.size})`,
+      );
+      scheduleIdleStop();
+      return;
+    }
     stopping = true;
     if (controlStateInterval) {
       clearInterval(controlStateInterval);
@@ -2071,12 +2109,6 @@ async function createAgentSession(
     if (audioPump) {
       await audioPump.stop();
     }
-    if (realtimeWs) {
-      realtimeWs.close({ code: 1000, reason: 'session_stopped' });
-      realtimeWs = null;
-      realtimeReady = false;
-    }
-
     try {
       await room.disconnect();
     } catch (err) {
@@ -2134,6 +2166,13 @@ function readJsonBody(req) {
 
 async function startManager() {
   normalizeLiveKitUrl(process.env.LIVEKIT_URL);
+  const key = String(process.env.OPENAI_API_KEY || '');
+  const keyFingerprint = key ? `${key.slice(0, 12)}...${key.slice(-6)}` : 'missing';
+  console.log(
+    `[agent-manager] boot config: key=${keyFingerprint} model=${process.env.OPENAI_MODEL || 'gpt-4o-mini'} ` +
+      `realtimeModel=${process.env.OPENAI_REALTIME_SCREENING_MODEL || 'gpt-realtime-mini'} ` +
+      `agentMediaMode=${process.env.AGENT_MEDIA_MODE || 'direct'} cwd=${process.cwd()}`,
+  );
 
   const sessions = new Map();
   const pendingJoins = new Map();
@@ -2146,64 +2185,71 @@ async function startManager() {
     roomName,
     { interactiveStdin = false, reason = 'api', agentType = AGENT_TYPE_CLASSIC } = {},
   ) => {
-    const normalized = normalizeRoomName(roomName);
-    if (!normalized) {
+    const targetRoomName = String(roomName || '').trim();
+    const normalized = normalizeRoomName(targetRoomName);
+    if (!targetRoomName || !normalized) {
       throw new Error('roomName is required');
     }
+    const roomKey = normalized;
     const requestedAgentType = normalizeAgentType(agentType);
+    const requestedIdentity = botIdentityForRoom(targetRoomName, requestedAgentType);
 
     const shouldResetExisting =
       resetSessionOnJoin && (reason === 'control-api' || reason === 'startup-default-room');
 
-    if (sessions.has(normalized)) {
-      const existing = sessions.get(normalized);
+    if (sessions.has(roomKey)) {
+      const existing = sessions.get(roomKey);
       const typeChanged = existing?.agentType && existing.agentType !== requestedAgentType;
       const shouldReset = shouldResetExisting || typeChanged;
       if (!shouldReset) {
-        return { roomName: normalized, status: 'already_joined', agentType: requestedAgentType };
+        await evictStaleBotParticipants(targetRoomName, existing?.identity || requestedIdentity);
+        return { roomName: targetRoomName, status: 'already_joined', agentType: requestedAgentType };
       }
 
-      sessions.delete(normalized);
+      sessions.delete(roomKey);
       if (existing && typeof existing.stop === 'function') {
         await existing.stop('reset_on_join').catch((err) => {
-          console.error(`[agent-manager] failed to reset room '${normalized}':`, err);
+          console.error(`[agent-manager] failed to reset room '${targetRoomName}':`, err);
         });
       }
     }
 
-    if (pendingJoins.has(normalized)) {
-      await pendingJoins.get(normalized);
-      if (sessions.has(normalized) && !shouldResetExisting) {
-        const existing = sessions.get(normalized);
+    if (pendingJoins.has(roomKey)) {
+      await pendingJoins.get(roomKey);
+      if (sessions.has(roomKey) && !shouldResetExisting) {
+        const existing = sessions.get(roomKey);
         if (!existing || existing.agentType === requestedAgentType) {
-          return { roomName: normalized, status: 'already_joined', agentType: requestedAgentType };
+          await evictStaleBotParticipants(targetRoomName, existing?.identity || requestedIdentity);
+          return { roomName: targetRoomName, status: 'already_joined', agentType: requestedAgentType };
         }
       }
     }
 
+    await evictStaleBotParticipants(targetRoomName, requestedIdentity);
+
     console.log(
-      `[agent-manager] joining room '${normalized}' as '${requestedAgentType}' (reason: ${reason})`,
+      `[agent-manager] joining room '${targetRoomName}' as '${requestedAgentType}' (reason: ${reason})`,
     );
 
-    const joinTask = createAgentSession(normalized, {
+    const joinTask = createAgentSession(targetRoomName, {
       interactiveStdin,
       agentType: requestedAgentType,
       onStop: (name) => {
-        sessions.delete(name);
+        sessions.delete(roomKey);
         console.log(`[agent-manager] room session removed: '${name}'`);
       },
     })
       .then((session) => {
-        sessions.set(normalized, session);
+        sessions.set(roomKey, session);
       })
       .finally(() => {
-        pendingJoins.delete(normalized);
+        pendingJoins.delete(roomKey);
       });
 
-    pendingJoins.set(normalized, joinTask);
+    pendingJoins.set(roomKey, joinTask);
     await joinTask;
 
-    return { roomName: normalized, status: 'joined', agentType: requestedAgentType };
+    return { roomName: targetRoomName, status: 'joined', agentType: requestedAgentType };
   };
 
   const controlEnabled = process.env.AGENT_CONTROL_ENABLED !== 'false';

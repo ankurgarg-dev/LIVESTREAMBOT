@@ -58,6 +58,8 @@ class LLMService {
     this.history.push({ role: 'user', content: userText.trim() });
     this._trimHistory();
 
+    const streamIdleTimeoutMs = Math.max(2000, Number(process.env.LLM_STREAM_IDLE_TIMEOUT_MS || 12000));
+    const streamMaxDurationMs = Math.max(streamIdleTimeoutMs, Number(process.env.LLM_STREAM_MAX_DURATION_MS || 90000));
     const stream = await this._createChatCompletion({
       model: this.model,
       messages: this._messages(runtimeInstruction),
@@ -66,12 +68,69 @@ class LLMService {
     });
 
     let assistantText = '';
+    let streamTimedOut = false;
+    const startedAt = Date.now();
+    const iterator = stream[Symbol.asyncIterator]();
 
-    for await (const chunk of stream) {
-      const delta = chunk?.choices?.[0]?.delta?.content;
-      if (!delta) continue;
-      assistantText += delta;
-      yield delta;
+    while (true) {
+      const elapsedMs = Date.now() - startedAt;
+      const remainingMs = streamMaxDurationMs - elapsedMs;
+      if (remainingMs <= 0) {
+        streamTimedOut = true;
+        console.warn(`[llm] stream exceeded max duration (${streamMaxDurationMs}ms), aborting`);
+        break;
+      }
+
+      let idleTimer = null;
+      try {
+        const nextResult = await Promise.race([
+          iterator.next(),
+          new Promise((_, reject) => {
+            idleTimer = setTimeout(
+              () => reject(new Error(`LLM stream idle timeout after ${streamIdleTimeoutMs}ms`)),
+              Math.min(streamIdleTimeoutMs, remainingMs),
+            );
+          }),
+        ]);
+
+        if (idleTimer) clearTimeout(idleTimer);
+        if (nextResult?.done) break;
+
+        const chunk = nextResult?.value;
+        const delta = chunk?.choices?.[0]?.delta?.content;
+        if (!delta) continue;
+        assistantText += delta;
+        yield delta;
+      } catch (error) {
+        if (idleTimer) clearTimeout(idleTimer);
+        streamTimedOut = true;
+        console.warn('[llm] stream aborted due to timeout/error:', error?.message || error);
+        break;
+      }
+    }
+
+    // Some providers/models can complete a streamed response with no text deltas,
+    // or can stall mid-stream. Fall back to a non-stream turn to avoid silent replies.
+    if (!assistantText.trim() || streamTimedOut) {
+      const fallback = await this._createChatCompletion({
+        model: this.model,
+        messages: this._messages(runtimeInstruction),
+        temperature: 0.6,
+        stream: false,
+      });
+      const fallbackText = String(fallback?.choices?.[0]?.message?.content || '').trim();
+      if (fallbackText) {
+        if (!assistantText.trim()) {
+          assistantText = fallbackText;
+          yield fallbackText;
+        } else {
+          const remaining = fallbackText.replace(assistantText, '').trim();
+          if (remaining) {
+            assistantText = `${assistantText} ${remaining}`.trim();
+            yield remaining;
+          }
+        }
+      }
     }
 
     this.history.push({ role: 'assistant', content: assistantText.trim() });

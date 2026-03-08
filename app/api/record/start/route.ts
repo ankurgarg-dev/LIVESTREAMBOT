@@ -1,4 +1,5 @@
-import { startRoomRecording } from '@/lib/server/recording';
+import { getLatestInterviewByRoom, updateInterview } from '@/lib/server/interviewStore';
+import { buildRecordingPublicUrl, startRoomRecording } from '@/lib/server/recording';
 import { NextRequest, NextResponse } from 'next/server';
 
 async function readRoomName(req: NextRequest): Promise<string | null> {
@@ -23,6 +24,13 @@ async function handleStart(req: NextRequest) {
     }
 
     const result = await startRoomRecording(roomName);
+    const recordingUrl = result.filepath ? buildRecordingPublicUrl(result.filepath) : null;
+    if (recordingUrl) {
+      const interview = await getLatestInterviewByRoom(roomName);
+      if (interview?.id) {
+        await updateInterview(interview.id, { recordingUrl });
+      }
+    }
     return NextResponse.json(
       {
         ok: true,
@@ -30,6 +38,7 @@ async function handleStart(req: NextRequest) {
         status: result.created ? 'started' : 'already_recording',
         egressId: result.egress.egressId,
         filepath: result.filepath,
+        recordingUrl,
       },
       { status: result.created ? 200 : 409 },
     );

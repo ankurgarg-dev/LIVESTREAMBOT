@@ -1,40 +1,27 @@
+'use client';
+
 import * as React from 'react';
+import { useParams, useSearchParams } from 'next/navigation';
 import { PageClientImpl } from './PageClientImpl';
 import { isVideoCodec } from '@/lib/types';
 
-export default async function Page({
-  params,
-  searchParams,
-}: {
-  params: Promise<{ roomName: string }>;
-  searchParams: Promise<{
-    // FIXME: We should not allow values for regions if in playground mode.
-    region?: string;
-    hq?: string;
-    codec?: string;
-    autojoin?: string;
-    name?: string;
-    agentType?: string;
-    role?: string;
-  }>;
-}) {
-  const _params = await params;
-  const _searchParams = await searchParams;
-  const codec =
-    typeof _searchParams.codec === 'string' && isVideoCodec(_searchParams.codec)
-      ? _searchParams.codec
-      : 'vp9';
-  const hq = _searchParams.hq === 'true' ? true : false;
-  const autoJoin = _searchParams.autojoin === '1' || _searchParams.autojoin === 'true';
-  const participantName = typeof _searchParams.name === 'string' ? _searchParams.name : undefined;
-  const joinRole = _searchParams.role === 'moderator' ? 'moderator' : 'candidate';
-  const agentType =
-    _searchParams.agentType === 'realtime_screening' ? 'realtime_screening' : 'classic';
+export default function Page() {
+  const params = useParams<{ roomName: string }>();
+  const searchParams = useSearchParams();
+  const roomName = params?.roomName || '';
+  const region = searchParams.get('region') || undefined;
+  const codecParam = searchParams.get('codec');
+  const codec = codecParam && isVideoCodec(codecParam) ? codecParam : 'vp9';
+  const hq = searchParams.get('hq') === 'true';
+  const autoJoin = searchParams.get('autojoin') === '1' || searchParams.get('autojoin') === 'true';
+  const participantName = searchParams.get('name') || undefined;
+  const joinRole = searchParams.get('role') === 'moderator' ? 'moderator' : 'candidate';
+  const agentType = searchParams.get('agentType') === 'realtime_screening' ? 'realtime_screening' : 'classic';
 
   return (
     <PageClientImpl
-      roomName={_params.roomName}
-      region={_searchParams.region}
+      roomName={roomName}
+      region={region}
       hq={hq}
       codec={codec}
       autoJoin={autoJoin}

@@ -3,7 +3,7 @@ import { useKrispNoiseFilter } from '@livekit/components-react/krisp';
 import { TrackToggle } from '@livekit/components-react';
 import { MediaDeviceMenu } from '@livekit/components-react';
 import { Track } from 'livekit-client';
-import { isLowPowerDevice } from './client-utils';
+import { isLowPowerDevice } from '@/lib/client-utils';
 
 export function MicrophoneSettings() {
   const { isNoiseFilterEnabled, setNoiseFilterEnabled, isNoiseFilterPending } = useKrispNoiseFilter(
@@ -21,10 +21,22 @@ export function MicrophoneSettings() {
     },
   );
 
+  const setNoiseFilterSafely = React.useCallback(
+    async (enabled: boolean) => {
+      try {
+        await setNoiseFilterEnabled(enabled);
+      } catch (error) {
+        // Local/self-hosted setups may not support Krisp auth.
+        console.warn('[krisp] unable to toggle noise cancellation:', error);
+      }
+    },
+    [setNoiseFilterEnabled],
+  );
+
   React.useEffect(() => {
-    // enable Krisp by default on non-low power devices
-    setNoiseFilterEnabled(!isLowPowerDevice());
-  }, []);
+    // Do not auto-enable Krisp in dev/self-hosted contexts.
+    setNoiseFilterSafely(false);
+  }, [setNoiseFilterSafely]);
   return (
     <div
       style={{
@@ -44,7 +56,7 @@ export function MicrophoneSettings() {
 
       <button
         className="lk-button"
-        onClick={() => setNoiseFilterEnabled(!isNoiseFilterEnabled)}
+        onClick={() => setNoiseFilterSafely(!isNoiseFilterEnabled)}
         disabled={isNoiseFilterPending}
         aria-pressed={isNoiseFilterEnabled}
       >

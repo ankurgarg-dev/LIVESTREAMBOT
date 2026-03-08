@@ -3,7 +3,6 @@ import { useRoomContext } from '@livekit/components-react';
 import { setLogLevel, LogLevel, RemoteTrackPublication, setLogExtension } from 'livekit-client';
 // @ts-ignore
 import { tinykeys } from 'tinykeys';
-import { datadogLogs } from '@datadog/browser-logs';
 
 import styles from '../styles/Debug.module.css';
 
@@ -13,33 +12,46 @@ export const useDebugMode = ({ logLevel }: { logLevel?: LogLevel }) => {
   React.useEffect(() => {
     setLogLevel(logLevel ?? 'debug');
 
-    if (process.env.NEXT_PUBLIC_DATADOG_CLIENT_TOKEN && process.env.NEXT_PUBLIC_DATADOG_SITE) {
-      console.log('setting up datadog logs');
-      datadogLogs.init({
-        clientToken: process.env.NEXT_PUBLIC_DATADOG_CLIENT_TOKEN,
-        site: process.env.NEXT_PUBLIC_DATADOG_SITE,
-        forwardErrorsToLogs: true,
-        sessionSampleRate: 100,
-      });
-
-      setLogExtension((level, msg, context) => {
-        switch (level) {
-          case LogLevel.debug:
-            datadogLogs.logger.debug(msg, context);
-            break;
-          case LogLevel.info:
-            datadogLogs.logger.info(msg, context);
-            break;
-          case LogLevel.warn:
-            datadogLogs.logger.warn(msg, context);
-            break;
-          case LogLevel.error:
-            datadogLogs.logger.error(msg, context);
-            break;
-          default:
-            break;
-        }
-      });
+    if (
+      process.env.NODE_ENV === 'production' &&
+      process.env.NEXT_PUBLIC_DATADOG_CLIENT_TOKEN &&
+      process.env.NEXT_PUBLIC_DATADOG_SITE
+    ) {
+      const globalKey = '__bc_datadog_logs_init_requested__';
+      const g = window as unknown as Record<string, unknown>;
+      if (!g[globalKey]) {
+        g[globalKey] = true;
+        void import('@datadog/browser-logs')
+          .then(({ datadogLogs }) => {
+            datadogLogs.init({
+              clientToken: process.env.NEXT_PUBLIC_DATADOG_CLIENT_TOKEN!,
+              site: process.env.NEXT_PUBLIC_DATADOG_SITE!,
+              forwardErrorsToLogs: true,
+              sessionSampleRate: 100,
+            });
+            setLogExtension((level, msg, context) => {
+              switch (level) {
+                case LogLevel.debug:
+                  datadogLogs.logger.debug(msg, context);
+                  break;
+                case LogLevel.info:
+                  datadogLogs.logger.info(msg, context);
+                  break;
+                case LogLevel.warn:
+                  datadogLogs.logger.warn(msg, context);
+                  break;
+                case LogLevel.error:
+                  datadogLogs.logger.error(msg, context);
+                  break;
+                default:
+                  break;
+              }
+            });
+          })
+          .catch((error) => {
+            console.warn('[debug] datadog init skipped:', error);
+          });
+      }
     }
 
     // @ts-expect-error

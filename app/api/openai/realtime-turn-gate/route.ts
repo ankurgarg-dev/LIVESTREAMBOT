@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+// TODO(remove after transcript rollout): endpoint for temporary post-transcript turn-gate flow.
 type UtteranceClass =
   | 'VOICE_CONTROL'
   | 'INTERVIEW_RELEVANT'

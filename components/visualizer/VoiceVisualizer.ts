@@ -1,4 +1,4 @@
-export type VisualizerState = 'idle' | 'thinking' | 'speaking';
+export type VisualizerState = 'idle' | 'thinking' | 'listening' | 'speaking';
 
 export interface VoiceVisualizer {
   init(container: HTMLElement): void;
@@ -6,4 +6,3 @@ export interface VoiceVisualizer {
   setState(state: VisualizerState): void;
   destroy(): void;
 }
-

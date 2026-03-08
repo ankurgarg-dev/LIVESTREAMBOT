@@ -8,8 +8,9 @@ const nextConfig = {
   webpack: (config, { buildId, dev, isServer, defaultLoaders, nextRuntime, webpack }) => {
     // Important: return the modified config
     config.module.rules.push({
-      test: /\.mjs$/,
+      test: /\.(m?js)$/,
       enforce: 'pre',
+      exclude: /node_modules/,
       use: ['source-map-loader'],
     });
 

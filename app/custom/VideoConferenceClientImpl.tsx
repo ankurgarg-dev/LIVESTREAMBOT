@@ -10,10 +10,10 @@ import {
   VideoPresets,
   type VideoCodec,
 } from 'livekit-client';
-import { DebugMode } from '@/lib/Debug';
+import { DebugMode } from '@/components/Debug';
 import { useEffect, useMemo, useState } from 'react';
-import { KeyboardShortcuts } from '@/lib/KeyboardShortcuts';
-import { SettingsMenu } from '@/lib/SettingsMenu';
+import { KeyboardShortcuts } from '@/components/KeyboardShortcuts';
+import { SettingsMenu } from '@/components/SettingsMenu';
 import { useSetupE2EE } from '@/lib/useSetupE2EE';
 import { useLowCPUOptimizer } from '@/lib/usePerfomanceOptimiser';
 

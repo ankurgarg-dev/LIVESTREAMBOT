@@ -16,15 +16,12 @@ import {
   ParticipantTile,
   RoomAudioRenderer,
   TrackMutedIndicator,
-  VideoTrack,
   isTrackReference,
   useCreateLayoutContext,
   useIsSpeaking,
   useIsRecording,
   useLocalParticipant,
   useMaybeTrackRefContext,
-  usePinnedTracks,
-  useRemoteParticipants,
   useRoomContext,
   useTracks,
   type MessageFormatter,
@@ -32,25 +29,21 @@ import {
   type TrackReferenceOrPlaceholder,
 } from '@livekit/components-react';
 import { RoomEvent, Track, type LocalAudioTrack, type Participant, type RemoteAudioTrack } from 'livekit-client';
-import { VisualizerManager } from '@/visualizer/VisualizerManager';
-import { OrbVisualizer } from '@/visualizer/OrbVisualizer';
-import { WaveformVisualizer } from '@/visualizer/WaveformVisualizer';
-import { ParticleHaloVisualizer } from '@/visualizer/ParticleHaloVisualizer';
-import { EqualizerVisualizer } from '@/visualizer/EqualizerVisualizer';
-import type { VisualizerState } from '@/visualizer/VoiceVisualizer';
-import { Orb } from '@/components/ui/orb';
+import { VisualizerManager } from '@/components/visualizer/VisualizerManager';
+import { OrbVisualizer } from '@/components/visualizer/OrbVisualizer';
+import { WaveformVisualizer } from '@/components/visualizer/WaveformVisualizer';
+import { ParticleHaloVisualizer } from '@/components/visualizer/ParticleHaloVisualizer';
+import { EqualizerVisualizer } from '@/components/visualizer/EqualizerVisualizer';
+import type { VisualizerState } from '@/components/visualizer/VoiceVisualizer';
+import { Orb, type AgentState as OrbAgentState } from '@/components/ui/orb';
 const RECORDING_ENDPOINT = process.env.NEXT_PUBLIC_LK_RECORD_ENDPOINT ?? '/api/record';
 
 export interface BristleconeVideoConferenceProps extends React.HTMLAttributes<HTMLDivElement> {
   chatMessageFormatter?: MessageFormatter;
   SettingsComponent?: React.ComponentType;
   isModerator?: boolean;
+  expectedAgentType?: 'classic' | 'realtime_screening';
 }
-
-type AgentOrbVariant = 'classic' | 'realtime_screening';
-type AgentTransportMode = 'realtime_ws' | 'direct_client' | 'turn_based' | 'unknown';
-type AgentMediaMode = 'direct' | 'relay' | 'unknown';
-type AgentAssistantState = 'idle' | 'thinking' | 'speaking' | 'unknown';
 
 function isRoomDebugEnabled(): boolean {
   if (typeof window === 'undefined') return false;
@@ -121,6 +114,7 @@ function ControlBarRecordingExtras({
 
   const toggleRecording = async () => {
     if (room.isE2EEEnabled || isToggling) return;
+    if (!room.name) return;
     setIsToggling(true);
     const endpoint = isRecording ? 'stop' : 'start';
     try {
@@ -191,19 +185,6 @@ function isAgentParticipant(participant?: Participant): boolean {
   );
 }
 
-function getAgentOrbVariant(participant?: Participant): AgentOrbVariant {
-  if (!participant) return 'classic';
-  const probe = `${participant.identity} ${participant.name ?? ''}`.toLowerCase();
-  if (
-    probe.includes('-rt-') ||
-    probe.includes('realtime') ||
-    probe.includes('screening')
-  ) {
-    return 'realtime_screening';
-  }
-  return 'classic';
-}
-
 function sameTrackRef(
   a: TrackReferenceOrPlaceholder | undefined,
   b: TrackReferenceOrPlaceholder | undefined,
@@ -228,17 +209,15 @@ function toTrackRef(participant: Participant, source: Track.Source): TrackRefere
 function AgentOrbOverlay({
   participant,
   localParticipant,
-  variant,
   paused = false,
-  agentTransportMode = 'unknown',
-  agentAssistantState = 'unknown',
+  variant = 'classic',
+  directAgentVisualState = 'idle',
 }: {
   participant: Participant;
   localParticipant?: Participant;
-  variant: AgentOrbVariant;
   paused?: boolean;
-  agentTransportMode?: AgentTransportMode;
-  agentAssistantState?: AgentAssistantState;
+  variant?: 'classic' | 'realtime_screening';
+  directAgentVisualState?: 'idle' | 'speaking';
 }) {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const managerRef = React.useRef<VisualizerManager | null>(null);
@@ -250,52 +229,32 @@ function AgentOrbOverlay({
   const lastLocalSpeakingRef = React.useRef(false);
   const thinkingTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const [visualState, setVisualState] = React.useState<VisualizerState>('idle');
-  const interruptedTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const processingTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [interruptedActive, setInterruptedActive] = React.useState(false);
-  const [processingActive, setProcessingActive] = React.useState(false);
-  const [realtimeState, setRealtimeState] = React.useState<
-    | 'idle'
-    | 'listening'
-    | 'processing'
-    | 'speaking'
-    | 'interrupted'
-    | 'paused'
-    | 'reconnecting'
-    | 'error'
-    | 'completed'
-    | 'muted_or_no_mic'
-  >('idle');
-  const wasAgentSpeakingRef = React.useRef(false);
-  const wasLocalSpeakingRealtimeRef = React.useRef(false);
+  const [agentActiveSpeaker, setAgentActiveSpeaker] = React.useState(false);
+  const [localActiveSpeaker, setLocalActiveSpeaker] = React.useState(false);
+  const room = useRoomContext();
 
   const isSpeaking = useIsSpeaking(participant);
   const localIsSpeaking = useIsSpeaking(localParticipant);
-  const remoteAudioLevel = Math.max(0, Math.min(1, Number((participant as Participant & { audioLevel?: number })?.audioLevel || 0)));
-  const localAudioLevel = Math.max(
-    0,
-    Math.min(1, Number((localParticipant as Participant & { audioLevel?: number } | undefined)?.audioLevel || 0)),
-  );
-  const localMicPub = localParticipant?.getTrackPublication(Track.Source.Microphone);
-  const micUnavailable = Boolean(localParticipant) && (!localMicPub || localMicPub.isMuted || !localMicPub.track);
 
   React.useEffect(() => {
-    if (variant === 'realtime_screening') {
-      return () => {
-        if (thinkingTimeoutRef.current) {
-          clearTimeout(thinkingTimeoutRef.current);
-          thinkingTimeoutRef.current = null;
-        }
-        if (interruptedTimeoutRef.current) {
-          clearTimeout(interruptedTimeoutRef.current);
-          interruptedTimeoutRef.current = null;
-        }
-        if (processingTimeoutRef.current) {
-          clearTimeout(processingTimeoutRef.current);
-          processingTimeoutRef.current = null;
-        }
-      };
-    }
+    const updateActiveSpeakers = () => {
+      const active = room.activeSpeakers;
+      const localIdentity = localParticipant?.identity;
+      const agentSpeaking = active.some((p) => p.identity === participant.identity);
+      const localSpeaking = localIdentity ? active.some((p) => p.identity === localIdentity) : false;
+      setAgentActiveSpeaker(agentSpeaking);
+      setLocalActiveSpeaker(localSpeaking);
+    };
+
+    updateActiveSpeakers();
+    room.on(RoomEvent.ActiveSpeakersChanged, updateActiveSpeakers);
+    return () => {
+      room.off(RoomEvent.ActiveSpeakersChanged, updateActiveSpeakers);
+    };
+  }, [room, participant.identity, localParticipant]);
+
+  React.useEffect(() => {
+    if (variant === 'realtime_screening') return;
     if (!containerRef.current) return;
 
     const manager = new VisualizerManager(containerRef.current);
@@ -303,7 +262,7 @@ function AgentOrbOverlay({
     manager.register('waveform', WaveformVisualizer);
     manager.register('particle-halo', ParticleHaloVisualizer);
     manager.register('equalizer', EqualizerVisualizer);
-    manager.switch('particle-halo');
+    manager.switch('orb');
     manager.setState('idle');
     managerRef.current = manager;
 
@@ -341,7 +300,13 @@ function AgentOrbOverlay({
   }, [variant, visualState]);
 
   React.useEffect(() => {
-    if (isSpeaking) {
+    const agentSpeakingNow =
+      variant === 'realtime_screening'
+        ? directAgentVisualState === 'speaking'
+        : isSpeaking || agentActiveSpeaker;
+    const localSpeakingNow = localIsSpeaking || localActiveSpeaker;
+
+    if (agentSpeakingNow) {
       if (thinkingTimeoutRef.current) {
         clearTimeout(thinkingTimeoutRef.current);
         thinkingTimeoutRef.current = null;
@@ -351,12 +316,12 @@ function AgentOrbOverlay({
       return;
     }
 
-    if (localIsSpeaking) {
+    if (localSpeakingNow) {
       if (thinkingTimeoutRef.current) {
         clearTimeout(thinkingTimeoutRef.current);
         thinkingTimeoutRef.current = null;
       }
-      setVisualState('speaking');
+      setVisualState('listening');
       lastLocalSpeakingRef.current = true;
       return;
     }
@@ -378,7 +343,7 @@ function AgentOrbOverlay({
     if (!thinkingTimeoutRef.current) {
       setVisualState('idle');
     }
-  }, [isSpeaking, localIsSpeaking]);
+  }, [variant, directAgentVisualState, isSpeaking, localIsSpeaking, agentActiveSpeaker, localActiveSpeaker]);
 
   React.useEffect(() => {
     if (variant === 'realtime_screening') return;
@@ -433,221 +398,106 @@ function AgentOrbOverlay({
     if (context.state !== 'running') {
       context.resume().catch(() => undefined);
     }
-  }, [participant, localParticipant, isSpeaking, localIsSpeaking, variant]);
+  }, [variant, participant, localParticipant, isSpeaking, localIsSpeaking]);
 
-  React.useEffect(() => {
-    if (variant !== 'realtime_screening') return;
-
-    if (localIsSpeaking && wasAgentSpeakingRef.current) {
-      setInterruptedActive(true);
-      if (interruptedTimeoutRef.current) clearTimeout(interruptedTimeoutRef.current);
-      interruptedTimeoutRef.current = setTimeout(() => {
-        setInterruptedActive(false);
-        interruptedTimeoutRef.current = null;
-      }, 420);
-    }
-
-    if (localIsSpeaking) {
-      setProcessingActive(false);
-      if (processingTimeoutRef.current) {
-        clearTimeout(processingTimeoutRef.current);
-        processingTimeoutRef.current = null;
-      }
-    }
-
-    if (wasLocalSpeakingRealtimeRef.current && !localIsSpeaking && !isSpeaking) {
-      setProcessingActive(true);
-      if (processingTimeoutRef.current) clearTimeout(processingTimeoutRef.current);
-      processingTimeoutRef.current = setTimeout(() => {
-        setProcessingActive(false);
-        processingTimeoutRef.current = null;
-      }, 5200);
-    }
-
-    if (isSpeaking) {
-      setProcessingActive(false);
-      if (processingTimeoutRef.current) {
-        clearTimeout(processingTimeoutRef.current);
-        processingTimeoutRef.current = null;
-      }
-    }
-
-    wasAgentSpeakingRef.current = isSpeaking;
-    wasLocalSpeakingRealtimeRef.current = localIsSpeaking;
-
-    let next: typeof realtimeState = 'idle';
-    if (paused) {
-      next = 'paused';
-    } else if (interruptedActive) {
-      next = 'interrupted';
-    } else if (agentTransportMode === 'unknown') {
-      next = 'reconnecting';
-    } else if (agentAssistantState === 'speaking' || isSpeaking) {
-      next = 'speaking';
-    } else if (localIsSpeaking) {
-      next = 'listening';
-    } else if (agentAssistantState === 'thinking' || processingActive) {
-      next = 'processing';
-    } else if (micUnavailable) {
-      next = 'muted_or_no_mic';
-    } else {
-      next = 'idle';
-    }
-    setRealtimeState(next);
-
-    return () => undefined;
-  }, [agentAssistantState, agentTransportMode, interruptedActive, isSpeaking, localIsSpeaking, micUnavailable, paused, processingActive, variant]);
-
-  if (variant === 'realtime_screening') {
-    const orbAgentState: 'thinking' | 'listening' | 'talking' | null =
-      realtimeState === 'speaking'
-        ? 'talking'
-        : realtimeState === 'listening'
-          ? 'listening'
-          : realtimeState === 'processing' || realtimeState === 'interrupted' || realtimeState === 'reconnecting'
-            ? 'thinking'
-            : null;
-
-    return (
-      <div
-        className={`bc-eleven-orb-shell ${paused ? 'is-paused' : ''}`}
-        data-state={realtimeState}
-        aria-label="Realtime agent orb"
-      >
-        <div className="bc-eleven-orb-surface">
-          <Orb
-            className="bc-eleven-orb-canvas"
-            agentState={orbAgentState}
-            volumeMode="manual"
-            manualInput={localAudioLevel}
-            manualOutput={remoteAudioLevel}
-          />
-        </div>
-      </div>
-    );
-  }
+  const realtimeOrbState: OrbAgentState =
+    visualState === 'speaking'
+      ? 'talking'
+      : visualState === 'listening'
+        ? 'listening'
+        : visualState === 'thinking'
+          ? 'thinking'
+          : null;
 
   return (
     <div
-      className={`bc-agent-orb-shell bc-agent-orb-shell--classic ${paused ? 'is-paused' : ''}`}
+      className={`bc-agent-orb-shell ${
+        variant === 'realtime_screening' ? 'bc-agent-orb-shell--realtime' : 'bc-agent-orb-shell--classic'
+      } bc-agent-orb-shell--state-${visualState} ${paused ? 'is-paused' : ''}`}
       aria-label="AI audio visualizer"
+      data-agent-state={visualState}
     >
-      <div ref={containerRef} className="bc-agent-orb-canvas" />
+      {variant === 'realtime_screening' ? (
+        <div className="bc-agent-realtime-cluster">
+          <div className="bc-agent-storm bc-agent-storm--a" aria-hidden="true" />
+          <div className="bc-agent-storm bc-agent-storm--b" aria-hidden="true" />
+          <div className="bc-agent-particle-ring" aria-hidden="true" />
+          <div className="bc-agent-orb-core">
+            <div className="bc-agent-orb-realtime-wrap">
+              <div className="bc-agent-orb-realtime-outer">
+                <div className="bc-agent-orb-realtime-inner">
+                  <Orb colors={['#21A6BD', '#4BC984']} seed={1100} agentState={realtimeOrbState} />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="bc-agent-orb-core">
+          <div ref={containerRef} className="bc-agent-orb-canvas" />
+        </div>
+      )}
     </div>
   );
 }
 
 function BristleconeParticipantTile({
   paused = false,
-  agentTransportMode = 'unknown',
-  agentAssistantState = 'unknown',
+  expectedAgentType = 'classic',
+  agentIdentityHint,
+  directAgentVisualState = 'idle',
 }: {
   paused?: boolean;
-  agentTransportMode?: AgentTransportMode;
-  agentAssistantState?: AgentAssistantState;
+  expectedAgentType?: 'classic' | 'realtime_screening';
+  agentIdentityHint?: string;
+  directAgentVisualState?: 'idle' | 'speaking';
 }) {
   const trackRef = useMaybeTrackRefContext();
   const participant = trackRef?.participant;
   const { localParticipant } = useLocalParticipant();
+  const room = useRoomContext();
 
   if (!participant) {
     return <ParticipantTile />;
   }
+  const participantPresent =
+    participant.isLocal || room.localParticipant.identity === participant.identity || room.remoteParticipants.has(participant.identity);
+  if (!participantPresent) {
+    // Track refs can briefly outlive participant presence during reconnect churn.
+    // Skip derived track widgets for stale participants to avoid LiveKit internal add-track errors.
+    return <ParticipantTile />;
+  }
 
-  const cameraRef = toTrackRef(participant, Track.Source.Camera);
   const micRef = toTrackRef(participant, Track.Source.Microphone);
+  const hintedAsAgent = Boolean(agentIdentityHint && participant.identity === agentIdentityHint);
+  const realtimeRemoteFallback =
+    expectedAgentType === 'realtime_screening' && !participant.isLocal;
   const renderOrb =
-    isAgentParticipant(participant) || (!participant.isLocal && !cameraRef && Boolean(micRef));
-  const orbVariant =
-    agentTransportMode === 'realtime_ws' || agentTransportMode === 'direct_client'
-      ? 'realtime_screening'
-      : getAgentOrbVariant(participant);
+    isAgentParticipant(participant) ||
+    hintedAsAgent ||
+    realtimeRemoteFallback ||
+    !participant.isLocal;
 
   if (!renderOrb) {
     return <ParticipantTile />;
   }
 
   return (
-    <ParticipantTile>
-      {cameraRef ? (
-        <VideoTrack trackRef={cameraRef} />
-      ) : (
-        <AgentOrbOverlay
-          participant={participant}
-          localParticipant={localParticipant}
-          variant={orbVariant}
-          paused={paused}
-          agentTransportMode={agentTransportMode}
-          agentAssistantState={agentAssistantState}
-        />
-      )}
+    <div className="lk-participant-tile bc-agent-participant-tile">
+      <AgentOrbOverlay
+        participant={participant}
+        localParticipant={localParticipant}
+        paused={paused}
+        variant={expectedAgentType}
+        directAgentVisualState={directAgentVisualState}
+      />
       {micRef ? <AudioTrack trackRef={micRef} /> : null}
       <div className="lk-participant-metadata bc-agent-meta">
         <div className="lk-participant-metadata-item">
-          <TrackMutedIndicator
-            trackRef={{ participant, source: Track.Source.Microphone }}
-            show={'muted'}
-          />
+          {micRef ? <TrackMutedIndicator trackRef={micRef} show={'muted'} /> : null}
           <ParticipantName />
         </div>
         <ConnectionQualityIndicator className="lk-participant-metadata-item" />
-      </div>
-    </ParticipantTile>
-  );
-}
-
-function FloatingAgentOrb({
-  trackedParticipantIdentities,
-  paused = false,
-  agentTransportMode = 'unknown',
-  agentAssistantState = 'unknown',
-}: {
-  trackedParticipantIdentities: Set<string>;
-  paused?: boolean;
-  agentTransportMode?: AgentTransportMode;
-  agentAssistantState?: AgentAssistantState;
-}) {
-  const { localParticipant } = useLocalParticipant();
-  const remoteParticipants = useRemoteParticipants({
-    updateOnlyOn: [
-      RoomEvent.ParticipantConnected,
-      RoomEvent.ParticipantDisconnected,
-      RoomEvent.TrackPublished,
-      RoomEvent.TrackUnpublished,
-      RoomEvent.TrackSubscribed,
-      RoomEvent.TrackUnsubscribed,
-      RoomEvent.ActiveSpeakersChanged,
-    ],
-  });
-
-  const fallbackAgent = React.useMemo(() => {
-    for (const participant of remoteParticipants) {
-      if (!isAgentParticipant(participant)) continue;
-      const hasCamera = Boolean(toTrackRef(participant, Track.Source.Camera));
-      const isTracked = trackedParticipantIdentities.has(participant.identity);
-      if (!hasCamera && !isTracked) return participant;
-    }
-    return undefined;
-  }, [remoteParticipants, trackedParticipantIdentities]);
-
-  if (!fallbackAgent) return null;
-
-  return (
-    <div className="bc-agent-floating-shell" aria-label="AI audio visualizer fallback">
-      <AgentOrbOverlay
-        participant={fallbackAgent}
-        localParticipant={localParticipant}
-        variant={
-          agentTransportMode === 'realtime_ws' || agentTransportMode === 'direct_client'
-            ? 'realtime_screening'
-            : getAgentOrbVariant(fallbackAgent)
-        }
-        paused={paused}
-        agentTransportMode={agentTransportMode}
-        agentAssistantState={agentAssistantState}
-      />
-      <div className="bc-agent-floating-label">
-        {fallbackAgent.name || fallbackAgent.identity}
       </div>
     </div>
   );
@@ -657,14 +507,17 @@ export function BristleconeVideoConference({
   chatMessageFormatter,
   SettingsComponent,
   isModerator = false,
+  expectedAgentType = 'classic',
   ...props
 }: BristleconeVideoConferenceProps) {
   const [showChat, setShowChat] = React.useState(false);
   const [showSettings, setShowSettings] = React.useState(false);
+  const room = useRoomContext();
 
   const tracks = useTracks(
     [
-      { source: Track.Source.Camera, withPlaceholder: true },
+      { source: Track.Source.Camera, withPlaceholder: false },
+      { source: Track.Source.Microphone, withPlaceholder: false },
       { source: Track.Source.ScreenShare, withPlaceholder: false },
     ],
     {
@@ -680,22 +533,68 @@ export function BristleconeVideoConference({
       onlySubscribed: false,
     },
   );
-  const trackedParticipantIdentities = React.useMemo(() => {
-    const ids = new Set<string>();
+  const layoutTracks = React.useMemo(() => {
+    const sourcePriority = (source: Track.Source | string): number => {
+      if (source === Track.Source.Camera) return 4;
+      if (source === Track.Source.Microphone) return 3;
+      if (source === Track.Source.ScreenShare) return 2;
+      return 1;
+    };
+
+    const byParticipant = new Map<string, TrackReferenceOrPlaceholder>();
     for (const track of tracks) {
-      const id = track?.participant?.identity;
-      if (id) ids.add(id);
+      const participant = track?.participant;
+      const participantId = String(participant?.identity || '').trim();
+      const participantPresent =
+        Boolean(participant?.isLocal) ||
+        participantId === room.localParticipant.identity ||
+        room.remoteParticipants.has(participantId);
+      if (!participantPresent) continue;
+
+      const existing = byParticipant.get(participantId);
+      if (!existing) {
+        byParticipant.set(participantId, track);
+        continue;
+      }
+
+      const existingSource = existing?.source ?? '';
+      const nextSource = track?.source ?? '';
+      const existingPriority = sourcePriority(existingSource);
+      const nextPriority = sourcePriority(nextSource);
+
+      if (nextPriority > existingPriority) {
+        byParticipant.set(participantId, track);
+        continue;
+      }
+      if (nextPriority === existingPriority && !isTrackReference(existing) && isTrackReference(track)) {
+        byParticipant.set(participantId, track);
+      }
     }
-    return ids;
-  }, [tracks]);
-  const room = useRoomContext();
+    return Array.from(byParticipant.values());
+  }, [room.localParticipant.identity, room.remoteParticipants, tracks]);
+  const layoutTrackKey = React.useMemo(
+    () =>
+      layoutTracks
+        .map((track) => {
+          const participantId = String(track?.participant?.identity || '').trim();
+          const sourceId = String(track?.source || '').trim();
+          const trackId =
+            isTrackReference(track) && track.publication?.trackSid
+              ? String(track.publication.trackSid)
+              : 'placeholder';
+          return `${participantId}:${sourceId}:${trackId}`;
+        })
+        .sort()
+        .join('|'),
+    [layoutTracks],
+  );
   const [isInterviewPaused, setIsInterviewPaused] = React.useState(false);
-  const [agentTransportMode, setAgentTransportMode] = React.useState<AgentTransportMode>('unknown');
-  const [agentAssistantState, setAgentAssistantState] = React.useState<AgentAssistantState>('unknown');
-  const [agentFullDuplex, setAgentFullDuplex] = React.useState(false);
-  const [agentMediaModeEffective, setAgentMediaModeEffective] = React.useState<AgentMediaMode>('unknown');
-  const [agentMediaModeConfigured, setAgentMediaModeConfigured] = React.useState<AgentMediaMode>('unknown');
   const [roomDebugEnabled, setRoomDebugEnabled] = React.useState(false);
+  const [agentIdentityHint, setAgentIdentityHint] = React.useState<string | undefined>(undefined);
+  const [directAgentVisualState, setDirectAgentVisualState] = React.useState<'idle' | 'speaking'>('idle');
+  const [audioPlayable, setAudioPlayable] = React.useState<boolean>(room.canPlaybackAudio);
+  const [audioActionMessage, setAudioActionMessage] = React.useState<string>('idle');
+  const [botAudioStatus, setBotAudioStatus] = React.useState<string>('bot audio: unknown');
 
   React.useEffect(() => {
     const enabled = isRoomDebugEnabled();
@@ -706,49 +605,25 @@ export function BristleconeVideoConference({
   }, [room.name]);
 
   React.useEffect(() => {
-    const onDataReceived = (payload: Uint8Array) => {
+    const onDataReceived = (payload: Uint8Array, participant?: Participant) => {
       try {
         const text = new TextDecoder().decode(payload).trim();
         if (!text.startsWith('{')) return;
         const parsed = JSON.parse(text);
         roomDebugLog(roomDebugEnabled, 'data-received', {
           type: parsed?.type || 'unknown',
-          transportMode: parsed?.transportMode || undefined,
-          mediaModeEffective: parsed?.mediaModeEffective || undefined,
-          assistantState: parsed?.assistantState || undefined,
           paused: parsed?.paused,
         });
         if (parsed?.type === 'agent_control_state') {
           setIsInterviewPaused(Boolean(parsed?.paused));
-          const mode = String(parsed?.transportMode || '').trim();
-          setAgentTransportMode(
-            mode === 'realtime_ws'
-              ? 'realtime_ws'
-              : mode === 'direct_client'
-                ? 'direct_client'
-                : mode === 'turn_based'
-                  ? 'turn_based'
-                  : 'unknown',
-          );
-          setAgentFullDuplex(Boolean(parsed?.fullDuplex));
-          const assistantStateRaw = String(parsed?.assistantState || '').trim().toLowerCase();
-          setAgentAssistantState(
-            assistantStateRaw === 'speaking'
-              ? 'speaking'
-              : assistantStateRaw === 'thinking'
-                ? 'thinking'
-                : assistantStateRaw === 'idle'
-                  ? 'idle'
-                  : 'unknown',
-          );
-          const mediaModeEffective = String(parsed?.mediaModeEffective || '').trim();
-          setAgentMediaModeEffective(
-            mediaModeEffective === 'direct' ? 'direct' : mediaModeEffective === 'relay' ? 'relay' : 'unknown',
-          );
-          const mediaModeConfigured = String(parsed?.mediaModeConfigured || '').trim();
-          setAgentMediaModeConfigured(
-            mediaModeConfigured === 'direct' ? 'direct' : mediaModeConfigured === 'relay' ? 'relay' : 'unknown',
-          );
+          if (participant?.identity) {
+            setAgentIdentityHint(participant.identity);
+          }
+          return;
+        }
+        if (parsed?.type === 'direct_agent_state') {
+          const nextState = String(parsed?.state || '').trim().toLowerCase();
+          setDirectAgentVisualState(nextState === 'speaking' ? 'speaking' : 'idle');
         }
       } catch {
         // Ignore non-JSON control payloads.
@@ -759,6 +634,104 @@ export function BristleconeVideoConference({
       room.off(RoomEvent.DataReceived, onDataReceived);
     };
   }, [room, roomDebugEnabled]);
+
+  React.useEffect(() => {
+    setAudioPlayable(room.canPlaybackAudio);
+    const onAudioPlaybackChanged = () => {
+      setAudioPlayable(room.canPlaybackAudio);
+      roomDebugLog(roomDebugEnabled, 'audio-playback-changed', { canPlaybackAudio: room.canPlaybackAudio });
+    };
+    room.on(RoomEvent.AudioPlaybackStatusChanged, onAudioPlaybackChanged);
+    return () => {
+      room.off(RoomEvent.AudioPlaybackStatusChanged, onAudioPlaybackChanged);
+    };
+  }, [room, roomDebugEnabled]);
+
+  const forceStartAudio = React.useCallback(async () => {
+    const playLocalProbeTone = async () => {
+      try {
+        const Ctx = window.AudioContext || (window as any).webkitAudioContext;
+        if (!Ctx) return;
+        const ctx = new Ctx();
+        if (ctx.state !== 'running') {
+          await ctx.resume();
+        }
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = 880;
+        gain.gain.value = 0.04;
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.12);
+        setTimeout(() => {
+          void ctx.close().catch(() => undefined);
+        }, 250);
+      } catch {
+        // Ignore local probe tone failures.
+      }
+    };
+
+    try {
+      setAudioActionMessage('starting...');
+      await room.startAudio();
+      setAudioPlayable(room.canPlaybackAudio);
+      await playLocalProbeTone();
+      setAudioActionMessage(`started @ ${new Date().toLocaleTimeString()}`);
+    } catch (error) {
+      const reason = String((error as any)?.message || error || 'unknown');
+      roomDebugLog(true, 'audio-start-failed', { error: reason });
+      setAudioActionMessage(`failed: ${reason}`);
+    }
+  }, [room]);
+
+  const syncBotAudioSubscription = React.useCallback(() => {
+    let status = 'bot audio: agent not found';
+    for (const participant of room.remoteParticipants.values()) {
+      if (!isAgentParticipant(participant)) continue;
+      const pub = participant.getTrackPublication(Track.Source.Microphone);
+      if (!pub) {
+        status = `bot audio: ${participant.identity} mic missing`;
+        continue;
+      }
+      if (!pub.isSubscribed) {
+        // Force subscription in case LiveKit autosubscribe drifted.
+        void pub.setSubscribed(true);
+      }
+      const muted = pub.isMuted ? 'muted' : 'unmuted';
+      const sub = pub.isSubscribed ? 'subscribed' : 'unsubscribed';
+      const hasTrack = pub.track ? 'track:yes' : 'track:no';
+      status = `bot audio: ${participant.identity} ${sub} ${muted} ${hasTrack}`;
+      break;
+    }
+    setBotAudioStatus(status);
+  }, [room]);
+
+  React.useEffect(() => {
+    syncBotAudioSubscription();
+    const refresh = () => syncBotAudioSubscription();
+    room.on(RoomEvent.ParticipantConnected, refresh);
+    room.on(RoomEvent.ParticipantDisconnected, refresh);
+    room.on(RoomEvent.TrackPublished, refresh);
+    room.on(RoomEvent.TrackUnpublished, refresh);
+    room.on(RoomEvent.TrackSubscribed, refresh);
+    room.on(RoomEvent.TrackUnsubscribed, refresh);
+    room.on(RoomEvent.TrackMuted, refresh);
+    room.on(RoomEvent.TrackUnmuted, refresh);
+    const timer = setInterval(refresh, 1500);
+    return () => {
+      clearInterval(timer);
+      room.off(RoomEvent.ParticipantConnected, refresh);
+      room.off(RoomEvent.ParticipantDisconnected, refresh);
+      room.off(RoomEvent.TrackPublished, refresh);
+      room.off(RoomEvent.TrackUnpublished, refresh);
+      room.off(RoomEvent.TrackSubscribed, refresh);
+      room.off(RoomEvent.TrackUnsubscribed, refresh);
+      room.off(RoomEvent.TrackMuted, refresh);
+      room.off(RoomEvent.TrackUnmuted, refresh);
+    };
+  }, [room, syncBotAudioSubscription]);
 
   React.useEffect(() => {
     const onConnected = () => roomDebugLog(roomDebugEnabled, 'room-connected', { room: room.name });
@@ -797,37 +770,26 @@ export function BristleconeVideoConference({
 
   const trackSnapshot = React.useMemo(
     () =>
-      tracks.map((track) => ({
+      layoutTracks.map((track) => ({
         participant: track?.participant?.identity || '',
         source: String(track?.source || ''),
         placeholder: !isTrackReference(track),
         isAgentLike: isAgentParticipant(track?.participant),
       })),
-    [tracks],
+    [layoutTracks],
   );
 
   React.useEffect(() => {
     roomDebugLog(roomDebugEnabled, 'state-snapshot', {
       trackCount: trackSnapshot.length,
       trackSnapshot,
-      trackedParticipantCount: trackedParticipantIdentities.size,
       isInterviewPaused,
-      agentTransportMode,
-      agentMediaModeEffective,
-      agentAssistantState,
     });
-  }, [
-    roomDebugEnabled,
-    trackSnapshot,
-    trackedParticipantIdentities,
-    isInterviewPaused,
-    agentTransportMode,
-    agentMediaModeEffective,
-    agentAssistantState,
-  ]);
+  }, [roomDebugEnabled, trackSnapshot, isInterviewPaused]);
 
   const togglePause = React.useCallback(async () => {
     if (!isModerator) return;
+    if (!room.name) return;
     const pausedNext = !isInterviewPaused;
     const payload = new TextEncoder().encode(
       JSON.stringify({ type: 'agent_control', action: pausedNext ? 'pause' : 'resume' }),
@@ -843,26 +805,8 @@ export function BristleconeVideoConference({
   }, [isInterviewPaused, isModerator, room]);
 
   const layoutContext = useCreateLayoutContext();
-  const focusTrack = usePinnedTracks(layoutContext)?.[0];
-  const carouselTracks = tracks.filter((track) => !sameTrackRef(track, focusTrack));
-  const transportLabel =
-    agentTransportMode === 'realtime_ws'
-      ? `Agent Transport: Realtime WS (${agentFullDuplex ? 'Full Duplex' : 'Realtime'})`
-      : agentTransportMode === 'direct_client'
-        ? 'Agent Transport: Direct Client (Full Duplex)'
-      : agentTransportMode === 'turn_based'
-        ? 'Agent Transport: Turn-based (Half Duplex)'
-        : 'Agent Transport: Detecting...';
-  const mediaLabel =
-    agentMediaModeEffective === 'direct'
-      ? 'Media Path: Direct'
-      : agentMediaModeEffective === 'relay'
-        ? 'Media Path: Relay'
-        : 'Media Path: Detecting...';
-  const mediaDetailLabel =
-    agentMediaModeConfigured !== 'unknown' && agentMediaModeConfigured !== agentMediaModeEffective
-      ? ` (configured: ${agentMediaModeConfigured})`
-      : '';
+  const focusTrack = undefined;
+  const carouselTracks = layoutTracks.filter((track) => !sameTrackRef(track, focusTrack));
 
   return (
     <div className="lk-video-conference" {...props}>
@@ -874,51 +818,14 @@ export function BristleconeVideoConference({
         }}
       >
         <div className="lk-video-conference-inner">
-          <div
-            style={{
-              alignSelf: 'center',
-              marginBottom: '0.5rem',
-              padding: '0.3rem 0.7rem',
-              borderRadius: '999px',
-              border: '1px solid rgba(120, 120, 120, 0.45)',
-              background:
-                agentTransportMode === 'realtime_ws' || agentTransportMode === 'direct_client'
-                  ? 'rgba(16, 185, 129, 0.15)'
-                  : agentTransportMode === 'turn_based'
-                    ? 'rgba(245, 158, 11, 0.15)'
-                    : 'rgba(100, 116, 139, 0.15)',
-              fontSize: '0.82rem',
-              fontWeight: 600,
-            }}
-          >
-            {transportLabel}
-          </div>
-          <div
-            style={{
-              alignSelf: 'center',
-              marginBottom: '0.5rem',
-              padding: '0.3rem 0.7rem',
-              borderRadius: '999px',
-              border: '1px solid rgba(120, 120, 120, 0.45)',
-              background:
-                agentMediaModeEffective === 'direct'
-                  ? 'rgba(16, 185, 129, 0.15)'
-                  : agentMediaModeEffective === 'relay'
-                    ? 'rgba(59, 130, 246, 0.15)'
-                    : 'rgba(100, 116, 139, 0.15)',
-              fontSize: '0.82rem',
-              fontWeight: 600,
-            }}
-          >
-            {`${mediaLabel}${mediaDetailLabel}`}
-          </div>
           {!focusTrack ? (
             <div className="lk-grid-layout-wrapper">
-              <GridLayout tracks={tracks}>
+              <GridLayout key={layoutTrackKey} tracks={layoutTracks}>
                   <BristleconeParticipantTile
                     paused={isInterviewPaused}
-                    agentTransportMode={agentTransportMode}
-                    agentAssistantState={agentAssistantState}
+                    expectedAgentType={expectedAgentType}
+                    agentIdentityHint={agentIdentityHint}
+                    directAgentVisualState={directAgentVisualState}
                   />
                 </GridLayout>
               </div>
@@ -928,8 +835,9 @@ export function BristleconeVideoConference({
                 <CarouselLayout tracks={carouselTracks}>
                   <BristleconeParticipantTile
                     paused={isInterviewPaused}
-                    agentTransportMode={agentTransportMode}
-                    agentAssistantState={agentAssistantState}
+                    expectedAgentType={expectedAgentType}
+                    agentIdentityHint={agentIdentityHint}
+                    directAgentVisualState={directAgentVisualState}
                   />
                 </CarouselLayout>
                 <FocusLayout trackRef={focusTrack} />
@@ -941,12 +849,6 @@ export function BristleconeVideoConference({
             isModerator={isModerator}
             isInterviewPaused={isInterviewPaused}
             onTogglePause={togglePause}
-          />
-          <FloatingAgentOrb
-            trackedParticipantIdentities={trackedParticipantIdentities}
-            paused={isInterviewPaused}
-            agentTransportMode={agentTransportMode}
-            agentAssistantState={agentAssistantState}
           />
         </div>
 
@@ -960,6 +862,49 @@ export function BristleconeVideoConference({
       </LayoutContextProvider>
 
       <RoomAudioRenderer />
+      <button
+        className="lk-button"
+        type="button"
+        onClick={forceStartAudio}
+        style={{ position: 'fixed', bottom: 12, right: 12, zIndex: 1000 }}
+      >
+        Start Bot Audio
+      </button>
+      <div
+        style={{
+          position: 'fixed',
+          bottom: 12,
+          right: 170,
+          zIndex: 1000,
+          padding: '6px 10px',
+          borderRadius: 10,
+          background: 'rgba(0,0,0,0.55)',
+          color: '#fff',
+          fontSize: 12,
+        }}
+      >
+        {audioPlayable ? 'Audio: allowed' : 'Audio: blocked'} | {audioActionMessage}
+      </div>
+      <div
+        style={{
+          position: 'fixed',
+          bottom: 42,
+          right: 170,
+          zIndex: 1000,
+          padding: '6px 10px',
+          borderRadius: 10,
+          background: 'rgba(0,0,0,0.55)',
+          color: '#fff',
+          fontSize: 12,
+          maxWidth: 560,
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+        }}
+        title={botAudioStatus}
+      >
+        {botAudioStatus}
+      </div>
       <ConnectionStateToast />
     </div>
   );

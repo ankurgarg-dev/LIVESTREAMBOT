@@ -1,11 +1,11 @@
 'use client';
 
 import React from 'react';
-import { VisualizerManager } from '@/visualizer/VisualizerManager';
-import { OrbVisualizer } from '@/visualizer/OrbVisualizer';
-import { WaveformVisualizer } from '@/visualizer/WaveformVisualizer';
-import { ParticleHaloVisualizer } from '@/visualizer/ParticleHaloVisualizer';
-import { EqualizerVisualizer } from '@/visualizer/EqualizerVisualizer';
+import { VisualizerManager } from '@/components/visualizer/VisualizerManager';
+import { OrbVisualizer } from '@/components/visualizer/OrbVisualizer';
+import { WaveformVisualizer } from '@/components/visualizer/WaveformVisualizer';
+import { ParticleHaloVisualizer } from '@/components/visualizer/ParticleHaloVisualizer';
+import { EqualizerVisualizer } from '@/components/visualizer/EqualizerVisualizer';
 import styles from './visualizer.module.css';
 
 const DEFAULT_TTS_URL =
@@ -155,4 +155,3 @@ export function VisualizerClient() {
     </main>
   );
 }
-

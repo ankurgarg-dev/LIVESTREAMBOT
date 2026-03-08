@@ -2,10 +2,10 @@
 
 import React from 'react';
 import { decodePassphrase } from '@/lib/client-utils';
-import { DebugMode } from '@/lib/Debug';
-import { KeyboardShortcuts } from '@/lib/KeyboardShortcuts';
-import { RecordingIndicator } from '@/lib/RecordingIndicator';
-import { SettingsMenu } from '@/lib/SettingsMenu';
+import { DebugMode } from '@/components/Debug';
+import { KeyboardShortcuts } from '@/components/KeyboardShortcuts';
+import { RecordingIndicator } from '@/components/RecordingIndicator';
+import { SettingsMenu } from '@/components/SettingsMenu';
 import { ConnectionDetails } from '@/lib/types';
 import {
   formatChatMessageLinks,
@@ -25,21 +25,23 @@ import {
   DeviceUnsupportedError,
   RoomConnectOptions,
   RoomEvent,
+  ParticipantEvent,
   TrackPublishDefaults,
   VideoCaptureOptions,
 } from 'livekit-client';
 import { useRouter } from 'next/navigation';
 import { useSetupE2EE } from '@/lib/useSetupE2EE';
 import { useLowCPUOptimizer } from '@/lib/usePerfomanceOptimiser';
-import { BristleconeVideoConference } from '@/lib/BristleconeVideoConference';
+import { BristleconeVideoConference } from '@/components/BristleconeVideoConference';
 
 const CONN_DETAILS_ENDPOINT =
   process.env.NEXT_PUBLIC_CONN_DETAILS_ENDPOINT ?? '/api/connection-details';
 const SHOW_SETTINGS_MENU = process.env.NEXT_PUBLIC_SHOW_SETTINGS_MENU !== 'false';
 const RECORDING_ENDPOINT = process.env.NEXT_PUBLIC_LK_RECORD_ENDPOINT ?? '/api/record';
 const AUTO_RECORD_INTERVIEW = process.env.NEXT_PUBLIC_AUTO_RECORD_INTERVIEW === 'true';
-const MEDIA_MODE_PREFERENCE =
-  String(process.env.NEXT_PUBLIC_AGENT_MEDIA_MODE || 'direct').trim().toLowerCase() === 'relay' ? 'relay' : 'direct';
+const MEDIA_MODE_PREFERENCE = 'direct';
+// TODO(remove after transcript rollout): delete temporary post-transcript turn-gate flow.
+const ENABLE_TRANSCRIPT_POST_GATE_FLOW = false;
 
 export function PageClientImpl(props: {
   roomName: string;
@@ -221,6 +223,7 @@ export function PageClientImpl(props: {
           userChoices={preJoinChoices}
           options={{ codec: props.codec, hq: props.hq }}
           joinRole={joinRole}
+          requestedAgentType={props.agentType}
         />
       )}
     </main>
@@ -230,6 +233,7 @@ export function PageClientImpl(props: {
 function VideoConferenceComponent(props: {
   userChoices: LocalUserChoices;
   connectionDetails: ConnectionDetails;
+  requestedAgentType?: 'classic' | 'realtime_screening';
   options: {
     hq: boolean;
     codec: VideoCodec;
@@ -238,6 +242,7 @@ function VideoConferenceComponent(props: {
 }) {
   const contextPublishedRef = React.useRef(false);
   const localTracksEnabledRef = React.useRef(false);
+  const disconnectNoticeRef = React.useRef('');
   React.useEffect(() => {
     contextPublishedRef.current = false;
     localTracksEnabledRef.current = false;
@@ -314,6 +319,45 @@ function VideoConferenceComponent(props: {
     return out;
   };
 
+  const isRetryableAuthConnectError = React.useCallback((error: unknown): boolean => {
+    const message = String((error as { message?: unknown })?.message || error || '').toLowerCase();
+    return (
+      message.includes('could not authenticate') ||
+      message.includes('status 404') ||
+      message.includes('not found') ||
+      message.includes('unauthorized') ||
+      message.includes('token')
+    );
+  }, []);
+
+  const fetchFreshConnectionDetails = React.useCallback(async (): Promise<ConnectionDetails | null> => {
+    try {
+      const participantName = (props.connectionDetails.participantName || props.userChoices.username || '').trim();
+      if (!participantName) return null;
+      const url = new URL(CONN_DETAILS_ENDPOINT, window.location.origin);
+      url.searchParams.set('roomName', props.connectionDetails.roomName);
+      url.searchParams.set('participantName', participantName);
+      url.searchParams.set('metadata', JSON.stringify({ role: props.joinRole }));
+      if (props.requestedAgentType === 'realtime_screening') {
+        url.searchParams.set('agentType', 'realtime_screening');
+      }
+      const response = await fetch(url.toString());
+      if (!response.ok) return null;
+      const nextDetails = (await response.json()) as ConnectionDetails;
+      if (!nextDetails?.serverUrl || !nextDetails?.participantToken) return null;
+      return nextDetails;
+    } catch (error) {
+      console.warn('[room] refresh connection-details failed:', error);
+      return null;
+    }
+  }, [
+    props.connectionDetails.participantName,
+    props.connectionDetails.roomName,
+    props.joinRole,
+    props.requestedAgentType,
+    props.userChoices.username,
+  ]);
+
   React.useEffect(() => {
     if (e2eeEnabled) {
       keyProvider
@@ -389,6 +433,7 @@ function VideoConferenceComponent(props: {
 
   const startRecordingBestEffort = React.useCallback(async () => {
     if (room.isE2EEEnabled) return;
+    if (!room.name) return;
     try {
       const response = await fetch(
         `${RECORDING_ENDPOINT}/start?roomName=${encodeURIComponent(room.name)}`,
@@ -406,6 +451,7 @@ function VideoConferenceComponent(props: {
   const stopRecordingBestEffort = React.useCallback(
     async (useBeacon = false) => {
       if (room.isE2EEEnabled) return;
+      if (!room.name) return;
       const stopUrl = `${RECORDING_ENDPOINT}/stop?roomName=${encodeURIComponent(room.name)}`;
       if (useBeacon && typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
         try {
@@ -429,7 +475,14 @@ function VideoConferenceComponent(props: {
     [room],
   );
   const router = useRouter();
-  const handleOnLeave = React.useCallback(() => router.push('/'), [router]);
+  const handleOnLeave = React.useCallback(() => {
+    const notice = disconnectNoticeRef.current.trim();
+    if (notice) {
+      alert(notice);
+      disconnectNoticeRef.current = '';
+    }
+    router.push('/');
+  }, [router]);
   const handleError = React.useCallback((error: Error) => {
     console.error(error);
     alert(`Encountered an unexpected error, check the console logs for details: ${error.message}`);
@@ -442,6 +495,24 @@ function VideoConferenceComponent(props: {
   }, []);
 
   React.useEffect(() => {
+    const handleDataReceived = (payload: Uint8Array) => {
+      try {
+        const text = new TextDecoder().decode(payload).trim();
+        if (!text.startsWith('{')) return;
+        const parsed = JSON.parse(text);
+        if (parsed?.type !== 'interview_notice') return;
+        const reason = String(parsed?.reason || '').trim();
+        const message = String(parsed?.message || '').trim();
+        if (reason === 'screening_time_limit') {
+          disconnectNoticeRef.current =
+            message || 'Interview time limit reached. The session has ended and your transcript is being finalized.';
+        }
+      } catch {
+        // Ignore non-JSON or malformed payloads.
+      }
+    };
+
+    room.on(RoomEvent.DataReceived, handleDataReceived);
     room.on(RoomEvent.Disconnected, handleOnLeave);
     room.on(RoomEvent.EncryptionError, handleEncryptionError);
     room.on(RoomEvent.MediaDevicesError, handleError);
@@ -469,17 +540,43 @@ function VideoConferenceComponent(props: {
     if (e2eeSetupComplete) {
       room.on(RoomEvent.Connected, handleConnected);
       const connectWithFallbacks = async () => {
-        const urls = getConnectionUrlFallbacks(props.connectionDetails.serverUrl);
+        const connectUsingDetails = async (details: ConnectionDetails) => {
+          const urls = getConnectionUrlFallbacks(details.serverUrl);
+          let attemptError: unknown = undefined;
+          for (const serverUrl of urls) {
+            try {
+              await room.connect(serverUrl, details.participantToken, connectOptions);
+              return;
+            } catch (error) {
+              attemptError = error;
+              // Fallback probing can fail on some URLs/protocols before a later URL succeeds.
+              // Keep this as a warning to avoid noisy dev error overlays for recoverable attempts.
+              console.warn('[room] connect fallback failed for url:', serverUrl, error);
+            }
+          }
+          throw attemptError instanceof Error ? attemptError : new Error('Failed to connect to LiveKit signaling server');
+        };
+
         let lastError: unknown = undefined;
-        for (const serverUrl of urls) {
-          try {
-            await room.connect(serverUrl, props.connectionDetails.participantToken, connectOptions);
-            return;
-          } catch (error) {
-            lastError = error;
-            console.error('[room] connect failed for url:', serverUrl, error);
+        try {
+          await connectUsingDetails(props.connectionDetails);
+          return;
+        } catch (error) {
+          lastError = error;
+        }
+
+        if (isRetryableAuthConnectError(lastError)) {
+          const refreshed = await fetchFreshConnectionDetails();
+          if (refreshed) {
+            try {
+              await connectUsingDetails(refreshed);
+              return;
+            } catch (retryError) {
+              lastError = retryError;
+            }
           }
         }
+
         throw lastError instanceof Error ? lastError : new Error('Failed to connect to LiveKit signaling server');
       };
       connectWithFallbacks().catch((error) => {
@@ -491,6 +588,7 @@ function VideoConferenceComponent(props: {
     }
     return () => {
       room.off(RoomEvent.Connected, handleConnected);
+      room.off(RoomEvent.DataReceived, handleDataReceived);
       room.off(RoomEvent.Disconnected, handleOnLeave);
       room.off(RoomEvent.EncryptionError, handleEncryptionError);
       room.off(RoomEvent.MediaDevicesError, handleError);
@@ -502,9 +600,11 @@ function VideoConferenceComponent(props: {
     handleError,
     handleOnLeave,
     props.connectionDetails,
+    fetchFreshConnectionDetails,
     props.userChoices,
     publishInterviewContextBestEffort,
     room,
+    isRetryableAuthConnectError,
   ]);
 
   const lowPowerMode = useLowCPUOptimizer(room);
@@ -557,14 +657,28 @@ function VideoConferenceComponent(props: {
 
   React.useEffect(() => {
     if (props.joinRole === 'moderator') return;
-    if (MEDIA_MODE_PREFERENCE !== 'direct') return;
     if (props.connectionDetails.interviewContext?.agentType !== 'realtime_screening') return;
 
     let cancelled = false;
     let pc: RTCPeerConnection | null = null;
-    let ownedStream: MediaStream | null = null;
     let remoteAudioEl: HTMLAudioElement | null = null;
     let oaiEventsDc: RTCDataChannel | null = null;
+    let directAgentVisualState: 'idle' | 'thinking' | 'speaking' = 'idle';
+    const interviewId = String(props.connectionDetails.interviewContext?.interviewId || '').trim();
+    const roomName = String(props.connectionDetails.roomName || '').trim();
+    const MAX_TRANSCRIPT_BUFFER_ENTRIES = 5000;
+    let transcriptBuffer: { role: 'candidate' | 'agent'; text: string; ts: string }[] = [];
+    let transcriptFlushTimer: ReturnType<typeof setTimeout> | null = null;
+    let transcriptFlushInFlight = false;
+    const seenTranscriptEventKeys = new Set<string>();
+    let resolvedInterviewId = interviewId;
+    let resolveInterviewIdPromise: Promise<string> | null = null;
+    let micSender: RTCRtpSender | null = null;
+    let botAudioContext: AudioContext | null = null;
+    let botAudioSourceNode: MediaStreamAudioSourceNode | null = null;
+    let botAudioGainNode: GainNode | null = null;
+    let botAudioDestinationNode: MediaStreamAudioDestinationNode | null = null;
+    let botAudioMediaTrack: MediaStreamTrack | null = null;
     let currentQuestion = String(props.connectionDetails.interviewContext?.currentQuestion || '').trim();
     let currentSkill = String(props.connectionDetails.interviewContext?.currentSkill || '').trim();
     let currentTopic = String(props.connectionDetails.interviewContext?.currentTopic || '').trim();
@@ -588,7 +702,7 @@ function VideoConferenceComponent(props: {
         const payload = new TextEncoder().encode(
           JSON.stringify({
             type: 'client_media_state',
-            mode: ready ? 'direct' : 'relay',
+            mode: 'direct',
             ready,
             reason,
             ts: new Date().toISOString(),
@@ -597,6 +711,252 @@ function VideoConferenceComponent(props: {
         await room.localParticipant.publishData(payload, { reliable: true });
       } catch (error) {
         console.warn('[direct-media] failed to publish client media state:', error);
+      }
+    };
+
+    const publishDirectAgentState = async (state: 'idle' | 'thinking' | 'speaking', reason = '') => {
+      if (room.state !== ConnectionState.Connected) return;
+      if (directAgentVisualState === state) return;
+      directAgentVisualState = state;
+      try {
+        const payload = new TextEncoder().encode(
+          JSON.stringify({
+            type: 'direct_agent_state',
+            state,
+            reason,
+            ts: new Date().toISOString(),
+          }),
+        );
+        await room.localParticipant.publishData(payload, { reliable: false });
+      } catch (error) {
+        console.warn('[direct-media] failed to publish direct agent state:', error);
+      }
+    };
+
+    const teardownDirectBotAudioTrack = async () => {
+      try {
+        if (botAudioMediaTrack) {
+          await room.localParticipant.unpublishTrack(botAudioMediaTrack, true);
+          const payload = new TextEncoder().encode(
+            JSON.stringify({
+              type: 'direct_bot_audio_track',
+              source: 'direct_bot_audio',
+              active: false,
+              ts: new Date().toISOString(),
+            }),
+          );
+          await room.localParticipant.publishData(payload, { reliable: false });
+        }
+      } catch {
+        // Ignore unpublish errors during cleanup.
+      }
+      if (botAudioMediaTrack) {
+        botAudioMediaTrack.stop();
+      }
+      botAudioMediaTrack = null;
+      try {
+        botAudioSourceNode?.disconnect();
+        botAudioGainNode?.disconnect();
+      } catch {
+        // Ignore graph disconnect errors during cleanup.
+      }
+      botAudioSourceNode = null;
+      botAudioGainNode = null;
+      botAudioDestinationNode = null;
+      if (botAudioContext) {
+        await botAudioContext.close().catch(() => undefined);
+      }
+      botAudioContext = null;
+    };
+
+    const ensureDirectBotAudioTrack = async (stream: MediaStream) => {
+      if (!stream.getAudioTracks().length) return;
+      await teardownDirectBotAudioTrack();
+
+      botAudioContext = new AudioContext();
+      botAudioSourceNode = botAudioContext.createMediaStreamSource(stream);
+      botAudioGainNode = botAudioContext.createGain();
+      botAudioGainNode.gain.value = 1;
+      botAudioDestinationNode = botAudioContext.createMediaStreamDestination();
+      botAudioSourceNode.connect(botAudioGainNode);
+      botAudioGainNode.connect(botAudioDestinationNode);
+
+      if (botAudioContext.state !== 'running') {
+        await botAudioContext.resume().catch(() => undefined);
+      }
+
+      const track = botAudioDestinationNode.stream.getAudioTracks()[0];
+      if (!track) return;
+      botAudioMediaTrack = track;
+      await room.localParticipant.publishTrack(track, {
+        name: 'ai-agent-audio-direct',
+        source: Track.Source.Unknown,
+        stream: 'ai-agent-direct',
+      });
+      try {
+        const payload = new TextEncoder().encode(
+          JSON.stringify({
+            type: 'direct_bot_audio_track',
+            source: 'direct_bot_audio',
+            active: true,
+            trackName: 'ai-agent-audio-direct',
+            ts: new Date().toISOString(),
+          }),
+        );
+        await room.localParticipant.publishData(payload, { reliable: false });
+      } catch {
+        // Ignore signaling failure; track publish is primary.
+      }
+      console.log('[direct-media] published bot audio track to LiveKit');
+    };
+
+    const ensureInterviewId = async (forceRefresh = false): Promise<string> => {
+      if (!forceRefresh && resolvedInterviewId) return resolvedInterviewId;
+      if (!roomName) return '';
+      if (resolveInterviewIdPromise) return resolveInterviewIdPromise;
+
+      resolveInterviewIdPromise = (async () => {
+        try {
+          const response = await fetch('/api/interviews', {
+            method: 'GET',
+            headers: { Accept: 'application/json' },
+          });
+          if (!response.ok) return '';
+          const json = await response.json().catch(() => ({}));
+          const interviews = Array.isArray(json?.interviews) ? json.interviews : [];
+          const match = interviews
+            .filter((item: any) => String(item?.roomName || '').trim() === roomName)
+            .sort((a: any, b: any) =>
+              String(b?.updatedAt || b?.createdAt || '').localeCompare(String(a?.updatedAt || a?.createdAt || '')),
+            )[0];
+          const nextId = String(match?.id || '').trim();
+          if (nextId) resolvedInterviewId = nextId;
+          return nextId;
+        } catch {
+          return '';
+        } finally {
+          resolveInterviewIdPromise = null;
+        }
+      })();
+
+      return resolveInterviewIdPromise;
+    };
+
+    const postTranscriptBatch = async (
+      entries: { role: 'candidate' | 'agent'; text: string; ts: string }[],
+    ): Promise<boolean> => {
+      if (entries.length === 0) return true;
+      const targetInterviewId = resolvedInterviewId || (await ensureInterviewId());
+      if (!targetInterviewId) return false;
+      const response = await fetch(`/api/interviews/${encodeURIComponent(targetInterviewId)}/transcript`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entries }),
+        keepalive: true,
+      });
+      if (response.status === 404) {
+        const refreshedInterviewId = await ensureInterviewId(true);
+        if (!refreshedInterviewId) return false;
+        const retryResponse = await fetch(`/api/interviews/${encodeURIComponent(refreshedInterviewId)}/transcript`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ entries }),
+          keepalive: true,
+        });
+        if (!retryResponse.ok) {
+          throw new Error(`transcript append failed with status ${retryResponse.status}`);
+        }
+        return true;
+      }
+      if (!response.ok) {
+        throw new Error(`transcript append failed with status ${response.status}`);
+      }
+      return true;
+    };
+
+    const flushTranscriptBuffer = async () => {
+      if (transcriptFlushInFlight || transcriptBuffer.length === 0) return;
+      transcriptFlushInFlight = true;
+      const batch = transcriptBuffer.splice(0, 80);
+      try {
+        const posted = await postTranscriptBatch(batch);
+        if (!posted) {
+          transcriptBuffer = [...batch, ...transcriptBuffer].slice(-MAX_TRANSCRIPT_BUFFER_ENTRIES);
+        }
+      } catch (error) {
+        transcriptBuffer = [...batch, ...transcriptBuffer].slice(-MAX_TRANSCRIPT_BUFFER_ENTRIES);
+        console.warn('[direct-media] transcript flush failed:', error);
+      } finally {
+        transcriptFlushInFlight = false;
+        if (transcriptBuffer.length > 0) {
+          transcriptFlushTimer = setTimeout(() => {
+            transcriptFlushTimer = null;
+            void flushTranscriptBuffer();
+          }, 1200);
+        }
+      }
+    };
+
+    const enqueueTranscript = (
+      role: 'candidate' | 'agent',
+      text: string,
+      eventKeyRaw?: string,
+    ) => {
+      const cleaned = String(text || '').replace(/\s+/g, ' ').trim();
+      if (!cleaned) return;
+
+      const eventKey = `${role}:${String(eventKeyRaw || '').trim()}`;
+      if (eventKeyRaw && seenTranscriptEventKeys.has(eventKey)) return;
+      if (eventKeyRaw) {
+        seenTranscriptEventKeys.add(eventKey);
+        if (seenTranscriptEventKeys.size > 5000) {
+          seenTranscriptEventKeys.clear();
+        }
+      }
+
+      transcriptBuffer.push({
+        role,
+        text: cleaned.slice(0, 1200),
+        ts: new Date().toISOString(),
+      });
+      if (transcriptBuffer.length > MAX_TRANSCRIPT_BUFFER_ENTRIES) {
+        transcriptBuffer = transcriptBuffer.slice(-MAX_TRANSCRIPT_BUFFER_ENTRIES);
+      }
+      if (transcriptBuffer.length >= 6) {
+        if (transcriptFlushTimer) {
+          clearTimeout(transcriptFlushTimer);
+          transcriptFlushTimer = null;
+        }
+        void flushTranscriptBuffer();
+        return;
+      }
+      if (!transcriptFlushTimer) {
+        transcriptFlushTimer = setTimeout(() => {
+          transcriptFlushTimer = null;
+          void flushTranscriptBuffer();
+        }, 1200);
+      }
+    };
+
+    const getLocalMicTrack = (): MediaStreamTrack | null => {
+      const localMicPublication = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+      if (!localMicPublication || localMicPublication.isMuted) return null;
+      const localMicTrack = localMicPublication.track as LocalAudioTrack | undefined;
+      return localMicTrack?.mediaStreamTrack ?? null;
+    };
+
+    const syncDirectMicTrack = async (reason = '') => {
+      if (!pc || !micSender) return;
+      try {
+        const nextTrack = getLocalMicTrack();
+        await micSender.replaceTrack(nextTrack);
+        if (nextTrack) {
+          await publishClientMediaState(true, reason || 'local_mic_live');
+        } else {
+          await publishClientMediaState(false, reason || 'local_mic_muted');
+        }
+      } catch (error) {
+        console.warn('[direct-media] failed to sync local mic track:', error);
       }
     };
 
@@ -629,6 +989,7 @@ function VideoConferenceComponent(props: {
       return '';
     };
 
+    // TODO(remove after transcript rollout): delete this helper with post-transcript gate block below.
     const gateCommittedTranscript = async (text: string) => {
       const response = await fetch('/api/openai/realtime-turn-gate', {
         method: 'POST',
@@ -656,31 +1017,30 @@ function VideoConferenceComponent(props: {
         currentTopic?: string;
       };
     };
+    let realtimeServerAutoResponse = false;
+    const requestRealtimeResponse = () => {
+      if (realtimeServerAutoResponse) return;
+      sendRealtimeEvent({
+        type: 'response.create',
+        response: {
+          modalities: ['audio', 'text'],
+        },
+      });
+    };
+    let lastRealtimeResponseRequestedAt = 0;
+    const requestRealtimeResponseWithCooldown = (reason: string) => {
+      const now = Date.now();
+      if (now - lastRealtimeResponseRequestedAt < 1500) return;
+      lastRealtimeResponseRequestedAt = now;
+      void publishDirectAgentState('thinking', reason);
+      requestRealtimeResponse();
+    };
 
     const setupDirectMedia = async () => {
       if (cancelled || room.state !== ConnectionState.Connected) return;
       if (pc) return;
 
       try {
-        let mediaTrack: MediaStreamTrack | undefined;
-        const localMicPublication = room.localParticipant.getTrackPublication(Track.Source.Microphone);
-        const localMicTrack = localMicPublication?.track as LocalAudioTrack | undefined;
-        if (localMicTrack?.mediaStreamTrack) {
-          mediaTrack = localMicTrack.mediaStreamTrack;
-        }
-
-        if (!mediaTrack) {
-          ownedStream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              deviceId: props.userChoices.audioDeviceId || undefined,
-            },
-            video: false,
-          });
-          mediaTrack = ownedStream.getAudioTracks()[0];
-        }
-
-        if (!mediaTrack) throw new Error('No local audio track available for direct media path');
-
         const tokenResponse = await fetch('/api/openai/realtime-session', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -699,6 +1059,7 @@ function VideoConferenceComponent(props: {
         if (!tokenResponse.ok || !tokenJson?.ephemeralKey || !tokenJson?.model) {
           throw new Error(tokenJson?.error || 'Failed to mint realtime session token');
         }
+        realtimeServerAutoResponse = Boolean(tokenJson?.createResponse);
 
         pc = new RTCPeerConnection();
         remoteAudioEl = new Audio();
@@ -710,6 +1071,9 @@ function VideoConferenceComponent(props: {
           if (!stream || !remoteAudioEl) return;
           remoteAudioEl.srcObject = stream;
           remoteAudioEl.play().catch(() => undefined);
+          void ensureDirectBotAudioTrack(stream).catch((error) => {
+            console.warn('[direct-media] failed to publish bot audio track:', error);
+          });
         };
 
         pc.onconnectionstatechange = () => {
@@ -719,7 +1083,9 @@ function VideoConferenceComponent(props: {
           }
         };
 
-        pc.addTrack(mediaTrack, new MediaStream([mediaTrack]));
+        const micTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
+        micSender = micTransceiver.sender;
+        await syncDirectMicTrack('initial_sync');
         oaiEventsDc = pc.createDataChannel('oai-events');
         oaiEventsDc.onmessage = (messageEvent) => {
           if (cancelled) return;
@@ -735,6 +1101,11 @@ function VideoConferenceComponent(props: {
           if (parsed?.type === 'response.audio_transcript.done') {
             const assistantText = String(parsed?.transcript || '').trim();
             if (!assistantText) return;
+            void publishDirectAgentState('idle', 'assistant_done');
+            const assistantEventKey = String(
+              parsed?.item_id || parsed?.response_id || parsed?.event_id || parsed?.id || '',
+            ).trim();
+            enqueueTranscript('agent', assistantText, assistantEventKey);
             const maybeQuestion = extractQuestion(assistantText);
             if (maybeQuestion) currentQuestion = maybeQuestion;
             const maybeSkill = detectMustHaveInText(assistantText);
@@ -745,11 +1116,35 @@ function VideoConferenceComponent(props: {
             return;
           }
 
+          if (parsed?.type === 'response.audio.delta') {
+            void publishDirectAgentState('speaking', 'assistant_audio_delta');
+            return;
+          }
+
+          if (parsed?.type === 'response.audio.done') {
+            void publishDirectAgentState('idle', 'assistant_audio_done');
+            return;
+          }
+
+          if (parsed?.type === 'input_audio_buffer.speech_stopped') {
+            requestRealtimeResponseWithCooldown('candidate_speech_stopped');
+            return;
+          }
+
           if (parsed?.type !== 'conversation.item.input_audio_transcription.completed') return;
           const transcriptText = String(parsed?.transcript || '').trim();
           if (!transcriptText) return;
+          const candidateEventKey = String(
+            parsed?.item_id || parsed?.event_id || parsed?.id || '',
+          ).trim();
+          enqueueTranscript('candidate', transcriptText, candidateEventKey);
 
           void (async () => {
+            // TODO(remove after transcript rollout): when removing gate flow, keep transcript enqueue and response.create only.
+            if (!ENABLE_TRANSCRIPT_POST_GATE_FLOW) {
+              requestRealtimeResponseWithCooldown('transcript_completed_no_gate');
+              return;
+            }
             try {
               const decision = await gateCommittedTranscript(transcriptText);
               const gateSystemMessage = String(decision?.systemMessage || '').trim();
@@ -769,14 +1164,10 @@ function VideoConferenceComponent(props: {
               if (nextQuestion) currentQuestion = nextQuestion;
               if (nextSkill) currentSkill = nextSkill;
               if (nextTopic) currentTopic = nextTopic;
-              sendRealtimeEvent({
-                type: 'response.create',
-                response: {
-                  modalities: ['audio', 'text'],
-                },
-              });
+              requestRealtimeResponseWithCooldown('transcript_completed_gate');
             } catch (error) {
               console.error('[direct-media] turn gate failed:', error);
+              // TODO(remove after transcript rollout): remove fallback system injection with gate flow.
               sendRealtimeEvent({
                 type: 'conversation.item.create',
                 item: {
@@ -791,12 +1182,7 @@ function VideoConferenceComponent(props: {
                   ],
                 },
               });
-              sendRealtimeEvent({
-                type: 'response.create',
-                response: {
-                  modalities: ['audio', 'text'],
-                },
-              });
+              requestRealtimeResponseWithCooldown('transcript_gate_fallback');
             }
           })();
         };
@@ -822,7 +1208,7 @@ function VideoConferenceComponent(props: {
         const answerSdp = await sdpResponse.text();
         await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
 
-        await publishClientMediaState(true, 'connected');
+        await syncDirectMicTrack('connected');
       } catch (error) {
         console.error('[direct-media] setup failed:', error);
         await publishClientMediaState(false, 'setup_failed');
@@ -835,25 +1221,67 @@ function VideoConferenceComponent(props: {
       });
     };
 
+    const flushTranscriptOnPageHide = () => {
+      const targetInterviewId = resolvedInterviewId;
+      if (!targetInterviewId || transcriptBuffer.length === 0) return;
+      const payload = JSON.stringify({ entries: transcriptBuffer.slice(0, 120) });
+      const endpoint = `/api/interviews/${encodeURIComponent(targetInterviewId)}/transcript`;
+      let sent = false;
+      if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+        try {
+          const blob = new Blob([payload], { type: 'application/json' });
+          sent = navigator.sendBeacon(endpoint, blob);
+        } catch {
+          sent = false;
+        }
+      }
+      if (!sent) {
+        void fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: payload,
+          keepalive: true,
+        }).catch(() => undefined);
+      }
+      transcriptBuffer = [];
+    };
+
+    const handleLocalMicPublicationEvent = (publication?: { source?: Track.Source }) => {
+      if (publication && publication.source !== Track.Source.Microphone) return;
+      void syncDirectMicTrack('local_mic_state_change');
+    };
+
     room.on(RoomEvent.Connected, onConnected);
+    room.localParticipant.on(ParticipantEvent.TrackMuted, handleLocalMicPublicationEvent);
+    room.localParticipant.on(ParticipantEvent.TrackUnmuted, handleLocalMicPublicationEvent);
+    room.localParticipant.on(ParticipantEvent.LocalTrackPublished, handleLocalMicPublicationEvent);
+    room.localParticipant.on(ParticipantEvent.LocalTrackUnpublished, handleLocalMicPublicationEvent);
+    window.addEventListener('pagehide', flushTranscriptOnPageHide);
     if (room.state === ConnectionState.Connected) {
       onConnected();
     }
 
     return () => {
       cancelled = true;
+      if (transcriptFlushTimer) {
+        clearTimeout(transcriptFlushTimer);
+        transcriptFlushTimer = null;
+      }
+      void publishDirectAgentState('idle', 'cleanup');
+      flushTranscriptOnPageHide();
       room.off(RoomEvent.Connected, onConnected);
+      room.localParticipant.off(ParticipantEvent.TrackMuted, handleLocalMicPublicationEvent);
+      room.localParticipant.off(ParticipantEvent.TrackUnmuted, handleLocalMicPublicationEvent);
+      room.localParticipant.off(ParticipantEvent.LocalTrackPublished, handleLocalMicPublicationEvent);
+      room.localParticipant.off(ParticipantEvent.LocalTrackUnpublished, handleLocalMicPublicationEvent);
+      window.removeEventListener('pagehide', flushTranscriptOnPageHide);
       void publishClientMediaState(false, 'cleanup');
       try {
         pc?.close();
       } catch {
         // ignore close errors
       }
-      if (ownedStream) {
-        for (const track of ownedStream.getTracks()) {
-          track.stop();
-        }
-      }
+      void teardownDirectBotAudioTrack();
       if (remoteAudioEl) {
         remoteAudioEl.pause();
         remoteAudioEl.srcObject = null;
@@ -876,6 +1304,12 @@ function VideoConferenceComponent(props: {
           chatMessageFormatter={formatChatMessageLinks}
           SettingsComponent={SHOW_SETTINGS_MENU ? SettingsMenu : undefined}
           isModerator={props.joinRole === 'moderator'}
+          expectedAgentType={
+            props.connectionDetails.interviewContext?.agentType === 'realtime_screening' ||
+            props.requestedAgentType === 'realtime_screening'
+              ? 'realtime_screening'
+              : 'classic'
+          }
         />
         <DebugMode />
         <RecordingIndicator />

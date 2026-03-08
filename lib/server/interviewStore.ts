@@ -274,9 +274,12 @@ export async function updateInterview(id: string, updates: InterviewUpdateInput)
   const row = await prisma.interview.findUnique({ where: { id } });
   const current = asInterviewRecord(row?.payload);
   if (!current) throw new Error('Interview not found');
+  const definedUpdates = Object.fromEntries(
+    Object.entries(updates).filter(([, value]) => value !== undefined),
+  ) as InterviewUpdateInput;
   const next: InterviewRecord = {
     ...current,
-    ...updates,
+    ...definedUpdates,
     updatedAt: new Date().toISOString(),
   };
   await prisma.interview.update({
